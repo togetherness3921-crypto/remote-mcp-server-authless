@@ -119,6 +119,104 @@ export class MyMCP extends McpAgent {
 		throw new Error(`Failed to get access token: ${JSON.stringify(data)}`);
 	}
 
+	// Format calendar events into compact summary
+	private formatCalendarSummary(events: any[], includeDesc: boolean): string {
+		// Color map - single letter codes
+		const colorMap: { [key: string]: string } = {
+			'1': 'Lav',  // Lavender
+			'2': 'Sage', // Sage
+			'3': 'Purp', // Purple
+			'4': 'Red',  // Red
+			'5': 'Yel',  // Yellow
+			'6': 'Org',  // Orange
+			'7': 'Turq', // Turquoise
+			'8': 'Gray', // Gray
+			'9': 'Blue', // Blue
+			'10': 'Grn', // Green
+			'11': 'Red'  // Red (duplicate)
+		};
+		
+		// Group events by day
+		const eventsByDay: { [key: string]: any[] } = {};
+		
+		events.forEach(event => {
+			if (!event.start) return;
+			
+			// Get the date key
+			let dateKey: string;
+			let timeStr: string;
+			
+			if (event.start.date) {
+				// All-day event
+				dateKey = event.start.date;
+				timeStr = 'ALL-DAY';
+			} else if (event.start.dateTime) {
+				// Timed event
+				const startDate = new Date(event.start.dateTime);
+				const endDate = new Date(event.end.dateTime);
+				
+				// Format date as YYYY-MM-DD
+				dateKey = startDate.toISOString().split('T')[0];
+				
+				// Format time as HH:MM-HH:MM in local time
+				const startHours = startDate.getHours().toString().padStart(2, '0');
+				const startMinutes = startDate.getMinutes().toString().padStart(2, '0');
+				const endHours = endDate.getHours().toString().padStart(2, '0');
+				const endMinutes = endDate.getMinutes().toString().padStart(2, '0');
+				timeStr = `${startHours}:${startMinutes}-${endHours}:${endMinutes}`;
+			} else {
+				return; // Skip if no valid start
+			}
+			
+			if (!eventsByDay[dateKey]) {
+				eventsByDay[dateKey] = [];
+			}
+			
+			// Build event line
+			let eventLine = `${timeStr} ${event.summary || 'Untitled'}`;
+			
+			// Add color if present
+			if (event.colorId) {
+				eventLine += ` [${colorMap[event.colorId] || event.colorId}]`;
+			}
+			
+			// Add description if requested and present
+			if (includeDesc && event.description) {
+				// Truncate description to first 50 chars
+				const desc = event.description.replace(/\n/g, ' ').slice(0, 50);
+				eventLine += ` - ${desc}${event.description.length > 50 ? '...' : ''}`;
+			}
+			
+			eventsByDay[dateKey].push({
+				line: eventLine,
+				sortKey: timeStr === 'ALL-DAY' ? '00:00' : timeStr
+			});
+		});
+		
+		// Format output
+		const days = Object.keys(eventsByDay).sort();
+		const output: string[] = [];
+		
+		days.forEach(day => {
+			const date = new Date(day + 'T12:00:00');
+			const dayName = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][date.getDay()];
+			
+			output.push(`${day} ${dayName}:`);
+			
+			// Sort events by time within day
+			eventsByDay[day].sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+			
+			// Add events
+			eventsByDay[day].forEach(event => {
+				output.push(event.line);
+			});
+			
+			output.push(''); // Empty line between days
+		});
+		
+		return output.join('\n').trim();
+	}
+
 	async init() {
 		// Simple addition tool
 		this.server.tool("add", { a: z.number(), b: z.number() }, async ({ a, b }) => ({
@@ -237,6 +335,83 @@ export class MyMCP extends McpAgent {
 							{
 								type: "text",
 								text: JSON.stringify(data, null, 2),
+							},
+						],
+					};
+				} catch (error) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: ${error.message}`,
+							},
+						],
+					};
+				}
+			},
+		);
+
+		// Get Calendar Summary - Compact view of events in date range
+		this.server.tool(
+			"get_calendar_summary",
+			{
+				calendar_id: z.string().describe("Calendar ID (email address)"),
+				start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("Start date in YYYY-MM-DD format"),
+				end_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).describe("End date in YYYY-MM-DD format"),
+				include_description: z.boolean().optional().default(false).describe("Include truncated descriptions in output"),
+			},
+			async ({ calendar_id, start_date, end_date, include_description }) => {
+				try {
+					const accessToken = await this.getServiceAccountToken();
+					
+					// Fetch all events in date range with pagination
+					let allEvents: any[] = [];
+					let pageToken: string | null = null;
+					
+					// Convert dates to ISO format with timezone
+					const timeMin = new Date(start_date + 'T00:00:00-06:00').toISOString();
+					const timeMax = new Date(end_date + 'T23:59:59-06:00').toISOString();
+					
+					do {
+						const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendar_id)}/events`);
+						url.searchParams.set('timeMin', timeMin);
+						url.searchParams.set('timeMax', timeMax);
+						url.searchParams.set('singleEvents', 'true');
+						url.searchParams.set('orderBy', 'startTime');
+						url.searchParams.set('maxResults', '250');
+						url.searchParams.set('timeZone', 'America/Chicago');
+						if (pageToken) {
+							url.searchParams.set('pageToken', pageToken);
+						}
+						
+						const response = await fetch(url.toString(), {
+							headers: {
+								'Authorization': `Bearer ${accessToken}`,
+								'Accept': 'application/json'
+							}
+						});
+						
+						if (!response.ok) {
+							throw new Error(`Calendar API error: ${response.status} ${response.statusText}`);
+						}
+						
+						const data = await response.json();
+						allEvents = allEvents.concat(data.items || []);
+						pageToken = data.nextPageToken || null;
+					} while (pageToken);
+					
+					// Format events into summary
+					const summary = this.formatCalendarSummary(allEvents, include_description);
+					
+					return {
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify({
+									summary: summary,
+									event_count: allEvents.length,
+									date_range: `${start_date} to ${end_date}`
+								}, null, 2),
 							},
 						],
 					};
