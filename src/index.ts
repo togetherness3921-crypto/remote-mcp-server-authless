@@ -51,21 +51,63 @@ export class MyMCP extends McpAgent {
 				return { content: [{ type: "text", text: String(result) }] };
 			},
 		);
+
+		// HTTP Batch Request tool for Google Calendar operations
+		this.server.tool(
+			"http_batch_request",
+			{
+				url: z.string(),
+				method: z.string().optional().default("POST"),
+				headers: z.record(z.string()).optional(),
+				body: z.string().optional(),
+			},
+			async ({ url, method, headers, body }) => {
+				try {
+					const response = await fetch(url, {
+						method: method,
+						headers: headers || {},
+						body: body,
+					});
+					
+					const responseText = await response.text();
+					
+					return {
+						content: [
+							{
+								type: "text",
+								text: JSON.stringify({
+									status: response.status,
+									statusText: response.statusText,
+									body: responseText,
+									headers: Object.fromEntries(response.headers.entries()),
+								}, null, 2),
+							},
+						],
+					};
+				} catch (error) {
+					return {
+						content: [
+							{
+								type: "text",
+								text: `Error: ${error.message}`,
+							},
+						],
+					};
+				}
+			},
+		);
 	}
 }
 
 export default {
 	fetch(request: Request, env: Env, ctx: ExecutionContext) {
 		const url = new URL(request.url);
-
 		if (url.pathname === "/sse" || url.pathname === "/sse/message") {
 			return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
 		}
-
 		if (url.pathname === "/mcp") {
 			return MyMCP.serve("/mcp").fetch(request, env, ctx);
 		}
-
 		return new Response("Not found", { status: 404 });
 	},
 };
