@@ -3,6 +3,10 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GoogleCalendarTools } from "./google-calendar-tools";
 
+// Hardcoded Supabase credentials
+const SUPABASE_URL = "https://cvzgxnspmmxxxwnxiydk.supabase.co";
+const SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2emd4bnNwbW14eHh3bnhpeWRrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1Njg3NzM1OCwiZXhwIjoyMDcyNDUzMzU4fQ.ZDl4Y3OQOeEeZ_QajGB6iRr0Xk3_Z7TMlI92yFmerzI";
+
 export class MyMCP extends McpAgent {
     server = new McpServer({
         name: "My MCP Server",
@@ -12,16 +16,13 @@ export class MyMCP extends McpAgent {
     private googleTools: GoogleCalendarTools;
 
     constructor(state?: any, env?: any) {
-        super(state, env);  // Pass through to parent
+        super(state, env);
         this.googleTools = new GoogleCalendarTools();
     }
 
     async init() {
-        // @ts-ignore - env is available on the parent class
-        const env = this.env;
-
         // Register Google Calendar tools
-        this.googleTools.registerTools(this.server, env);
+        this.googleTools.registerTools(this.server, this.env);
 
         // GRAPH MANAGEMENT TOOLS FOR SUPABASE
 
@@ -38,9 +39,6 @@ export class MyMCP extends McpAgent {
             },
             async ({ node_id, label, status, expanded, position_x, position_y }) => {
                 try {
-                    const supabaseUrl = env.SUPABASE_URL;
-                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
-                    
                     const updates: any = {};
                     if (label !== undefined) updates.label = label;
                     if (status !== undefined) updates.status = status;
@@ -48,11 +46,11 @@ export class MyMCP extends McpAgent {
                     if (position_x !== undefined) updates.position_x = position_x;
                     if (position_y !== undefined) updates.position_y = position_y;
                     
-                    const response = await fetch(`${supabaseUrl}/rest/v1/nodes?id=eq.${node_id}`, {
+                    const response = await fetch(`${SUPABASE_URL}/rest/v1/nodes?id=eq.${node_id}`, {
                         method: "PATCH",
                         headers: {
-                            'apikey': supabaseKey,
-                            'Authorization': `Bearer ${supabaseKey}`,
+                            'apikey': SUPABASE_SERVICE_KEY,
+                            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify(updates)
@@ -86,9 +84,6 @@ export class MyMCP extends McpAgent {
             },
             async ({ node_id, label, order_index }) => {
                 try {
-                    const supabaseUrl = env.SUPABASE_URL;
-                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
-                    
                     const newSubObjective = {
                         id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                         node_id: node_id,
@@ -97,11 +92,11 @@ export class MyMCP extends McpAgent {
                         order_index: order_index || 0
                     };
                     
-                    const response = await fetch(`${supabaseUrl}/rest/v1/sub_objectives`, {
+                    const response = await fetch(`${SUPABASE_URL}/rest/v1/sub_objectives`, {
                         method: "POST",
                         headers: {
-                            'apikey': supabaseKey,
-                            'Authorization': `Bearer ${supabaseKey}`,
+                            'apikey': SUPABASE_SERVICE_KEY,
+                            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                             'Content-Type': 'application/json'
                         },
                         body: JSON.stringify(newSubObjective)
@@ -135,18 +130,15 @@ export class MyMCP extends McpAgent {
             },
             async ({ sub_objective_id, label, status }) => {
                 try {
-                    const supabaseUrl = env.SUPABASE_URL;
-                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
-                    
                     const updates: any = {};
                     if (label !== undefined) updates.label = label;
                     if (status !== undefined) updates.status = status;
                     
-                    const response = await fetch(`${supabaseUrl}/rest/v1/sub_objectives?id=eq.${sub_objective_id}`, {
+                    const response = await fetch(`${SUPABASE_URL}/rest/v1/sub_objectives?id=eq.${sub_objective_id}`, {
                         method: "PATCH",
                         headers: {
-                            'apikey': supabaseKey,
-                            'Authorization': `Bearer ${supabaseKey}`,
+                            'apikey': SUPABASE_SERVICE_KEY,
+                            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                             'Content-Type': 'application/json',
                         },
                         body: JSON.stringify(updates)
@@ -178,42 +170,39 @@ export class MyMCP extends McpAgent {
             },
             async ({ include_completed }) => {
                 try {
-                    const supabaseUrl = env.SUPABASE_URL;
-                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
-                    
                     // Get nodes
-                    let nodesQuery = `${supabaseUrl}/rest/v1/nodes?select=*`;
+                    let nodesQuery = `${SUPABASE_URL}/rest/v1/nodes?select=*`;
                     if (!include_completed) {
                         nodesQuery += `&status=neq.completed`;
                     }
                     
                     const nodesResponse = await fetch(nodesQuery, {
                         headers: {
-                            'apikey': supabaseKey,
-                            'Authorization': `Bearer ${supabaseKey}`,
+                            'apikey': SUPABASE_SERVICE_KEY,
+                            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                         }
                     });
                     const nodes = await nodesResponse.json();
                     
                     // Get sub-objectives
-                    let subObjQuery = `${supabaseUrl}/rest/v1/sub_objectives?select=*&order=order_index`;
+                    let subObjQuery = `${SUPABASE_URL}/rest/v1/sub_objectives?select=*&order=order_index`;
                     if (!include_completed) {
                         subObjQuery += `&status=neq.completed`;
                     }
                     
                     const subObjResponse = await fetch(subObjQuery, {
                         headers: {
-                            'apikey': supabaseKey,
-                            'Authorization': `Bearer ${supabaseKey}`,
+                            'apikey': SUPABASE_SERVICE_KEY,
+                            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                         }
                     });
                     const subObjectives = await subObjResponse.json();
                     
                     // Get edges
-                    const edgesResponse = await fetch(`${supabaseUrl}/rest/v1/edges?select=*`, {
+                    const edgesResponse = await fetch(`${SUPABASE_URL}/rest/v1/edges?select=*`, {
                         headers: {
-                            'apikey': supabaseKey,
-                            'Authorization': `Bearer ${supabaseKey}`,
+                            'apikey': SUPABASE_SERVICE_KEY,
+                            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                         }
                     });
                     const edges = await edgesResponse.json();
@@ -254,7 +243,6 @@ export class MyMCP extends McpAgent {
     }
 }
 
-// This is the key change - use the static methods without creating instances
 export default {
     fetch(request: Request, env: Env, ctx: ExecutionContext) {
         const url = new URL(request.url);
