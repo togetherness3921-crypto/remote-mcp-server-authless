@@ -1,6 +1,7 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { SERVICE_ACCOUNT } from "./config";
 
 // Define our MCP agent with tools
 export class MyMCP extends McpAgent {
@@ -8,13 +9,6 @@ export class MyMCP extends McpAgent {
 		name: "Google Calendar Batch MCP",
 		version: "1.0.0",
 	});
-
-	// Service Account Credentials
-	private serviceAccount = {
-		client_email: "service-account@gen-lang-client-0988098854.iam.gserviceaccount.com",
-		private_key: "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQCL+6r/Ku83AULO\n+tSlZGGE4sR88ASIhZQCe/AQP+amSIogkbZinbJc1h87fwcc2Xhsw5+ivL/UZQ4t\nH+5Hx+NR6icbhn3Oe0j6z0u0+0rnuzXzV2Jchc2eUHCmN6syl0Gh4nKq746pQgVL\ntUjmNKzMmJ4cm5k3mbbKLnk90RdO8HUMJm6oAISyAcMW69JWWSy52WHnTz0mfUHD\nKr4PsJh8WxnvchPjhYhveQC5w9zCaKyhFQV/V8slO75awpBCcP6iP4DpgGbRYZg+\nh34hGkaZ3ZAYLr7emRrwTNooOsg29JQfP9mOl4x4UJVt0JWDcY39sOCB1Vb+e6uF\n6OU8HnG/AgMBAAECggEAFJpBgaAiaG3Bans/vulLnRD51bWcb9zRJZ3I0xYZ7rwF\nxbi3J5k0KOEZjwUpg9Unb0KfhTEolAHHmLFMEw6Cu4oDStQm7LP30B+gceOmaP2E\neZXmk92G9Ne8AgrMIfxhxt9wUbjuaKT0kz78RWgtTUjiby12MIO+2SUGkn2VY6MH\n/mbKio7nXXmGUpmI9gRt2SRG4J5mF6VP2uhBv4EFTA/eyviVFvuaBCFtXTSS7Ywc\nfisSUjlZqrzR63oB6o6tdH05zO3GBpMBuH6ZIMGZ9wia42vOH8BslDTqMWjviaeQ\nAgp4vYii5yyPh7VceO9CcRLueTdluLbRinqIyOMZeQKBgQDCRaqD9t0Nml615Niq\nNNr076sIkvPuv9VJbFvseN7XjMbZogFc9UHpzjxSRS6FF2ic2MQ4CZdFzVChk2j1\nXYiYAAM6Ibw4/4X+nn2boPqEMCNi6SG2yPlsxVWOCMqhfVrY+MnHB8lM7Xnxf6Ra\nqbVlLO2yYBpaMiX271fNd/cHAwKBgQC4dhA+au1lQ8tT3E8PsK1UqxTKPnrjXwT7\nHrmauABB+2Tc2daFoVKkPKnkGDBhEaPMGNVHgvFHTGeWU3DsdKBIC8A8kShO7tbO\nX8sis4EwFnIspvyACEkxrTIQnpJ15+ty+IiYM6B422KYh04U8WYCE0fOSlc3Adf3\nxZFecyoflQKBgQC+zQlRnm0w5QJMBzy8vjimA5WpUBr/y6zA9gm6UGQcs4jBSpmo\nIMDhzsnzyzqLQJhgI41jtBe8WI/ugQa+pWR4VNrWhzeDi4KgtiyLYyloFpdKl8mi\n6fP+3jjOzNemj6VgH8idD4qnYT048LIM0Uz015GEdVqsZ0BeLGfBxyb43QKBgGYL\n6rCdNvfuqW2bU6G6fCl6++Vm61UeHANQ3B1b7ciS6xnC6YrD1JRHezVUrG8G8zbW\nBiepqRFok2X2g2JMot84oQDgzQvd1bgWBqsL40xXHpLVTpsF+ngg+LF5CE1yIC9a\njzakWQKDW+hF8kxjv6smP3NAbT9hJblM8z7tN0CBAoGAJh7WskfS2IOk+HD4qQQd\nqZJ6n1Pj/xJGiPi/BSvSDducp1wgH1gCeEKQYnMOWjMoiZvemlyazVhwmLonlzdf\n1lFqII2cI2vFVHVETE/y4rTpquKxVQTyxJFvrzNusB4rHvr7ME/c4v+NfpedklZ5\nOS5d2hbuLh/+c4GncjcYWRM=\n-----END PRIVATE KEY-----\n",
-		token_uri: "https://oauth2.googleapis.com/token",
-	};
 
 	// Cache for access token
 	private accessToken: string | null = null;
@@ -58,9 +52,9 @@ export class MyMCP extends McpAgent {
 
 		const now = Math.floor(Date.now() / 1000);
 		const payload = {
-			iss: this.serviceAccount.client_email,
+			iss: SERVICE_ACCOUNT.client_email,
 			scope: "https://www.googleapis.com/auth/calendar",
-			aud: this.serviceAccount.token_uri,
+			aud: SERVICE_ACCOUNT.token_uri,
 			exp: now + 3600,
 			iat: now
 		};
@@ -71,7 +65,7 @@ export class MyMCP extends McpAgent {
 		const unsignedToken = `${encodedHeader}.${encodedPayload}`;
 
 		// Sign the token
-		const privateKey = await this.importPrivateKey(this.serviceAccount.private_key);
+		const privateKey = await this.importPrivateKey(SERVICE_ACCOUNT.private_key);
 		const signature = await crypto.subtle.sign(
 			"RSASSA-PKCS1-v1_5",
 			privateKey,
@@ -97,7 +91,7 @@ export class MyMCP extends McpAgent {
 		const jwt = await this.createSignedJWT();
 
 		// Exchange JWT for access token
-		const response = await fetch(this.serviceAccount.token_uri, {
+		const response = await fetch(SERVICE_ACCOUNT.token_uri, {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/x-www-form-urlencoded",
@@ -471,6 +465,243 @@ export class MyMCP extends McpAgent {
 					};
 				}
 			},
+		);
+
+		// GRAPH MANAGEMENT TOOLS FOR SUPABASE
+
+		// Update Node Status
+		this.server.tool(
+			"update_node",
+			{
+				node_id: z.string(),
+				label: z.string().optional(),
+				status: z.enum(["not-started", "in-progress", "completed", "blocked"]).optional(),
+				expanded: z.boolean().optional(),
+				position_x: z.number().optional(),
+				position_y: z.number().optional(),
+			},
+			async ({ node_id, label, status, expanded, position_x, position_y }) => {
+				try {
+					// @ts-ignore - env will have these
+					const supabaseUrl = env.SUPABASE_URL;
+					// @ts-ignore
+					const supabaseKey = env.SUPABASE_SERVICE_KEY;
+					
+					const updates: any = {};
+					if (label !== undefined) updates.label = label;
+					if (status !== undefined) updates.status = status;
+					if (expanded !== undefined) updates.expanded = expanded;
+					if (position_x !== undefined) updates.position_x = position_x;
+					if (position_y !== undefined) updates.position_y = position_y;
+					
+					const response = await fetch(`${supabaseUrl}/rest/v1/nodes?id=eq.${node_id}`, {
+						method: "PATCH",
+						headers: {
+							'apikey': supabaseKey,
+							'Authorization': `Bearer ${supabaseKey}`,
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify(updates)
+					});
+					
+					const result = await response.json();
+					return {
+						content: [{
+							type: "text",
+							text: `Updated node ${node_id}: ${JSON.stringify(updates)}`
+						}]
+					};
+				} catch (error) {
+					return {
+						content: [{
+							type: "text",
+							text: `Error updating node: ${error.message}`
+						}]
+					};
+				}
+			}
+		);
+
+		// Add Sub-Objective to Node
+		this.server.tool(
+			"add_sub_objective",
+			{
+				node_id: z.string(),
+				label: z.string(),
+				order_index: z.number().optional(),
+			},
+			async ({ node_id, label, order_index }) => {
+				try {
+					// @ts-ignore
+					const supabaseUrl = env.SUPABASE_URL;
+					// @ts-ignore
+					const supabaseKey = env.SUPABASE_SERVICE_KEY;
+					
+					const newSubObjective = {
+						id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+						node_id: node_id,
+						label: label,
+						status: "not-started",
+						order_index: order_index || 0
+					};
+					
+					const response = await fetch(`${supabaseUrl}/rest/v1/sub_objectives`, {
+						method: "POST",
+						headers: {
+							'apikey': supabaseKey,
+							'Authorization': `Bearer ${supabaseKey}`,
+							'Content-Type': 'application/json'
+						},
+						body: JSON.stringify(newSubObjective)
+					});
+					
+					const result = await response.json();
+					return {
+						content: [{
+							type: "text",
+							text: `Added sub-objective: ${label} to node ${node_id}`
+						}]
+					};
+				} catch (error) {
+					return {
+						content: [{
+							type: "text",
+							text: `Error adding sub-objective: ${error.message}`
+						}]
+					};
+				}
+			}
+		);
+
+		// Update Sub-Objective Status
+		this.server.tool(
+			"update_sub_objective",
+			{
+				sub_objective_id: z.string(),
+				label: z.string().optional(),
+				status: z.enum(["not-started", "in-progress", "completed", "blocked"]).optional(),
+			},
+			async ({ sub_objective_id, label, status }) => {
+				try {
+					// @ts-ignore
+					const supabaseUrl = env.SUPABASE_URL;
+					// @ts-ignore
+					const supabaseKey = env.SUPABASE_SERVICE_KEY;
+					
+					const updates: any = {};
+					if (label !== undefined) updates.label = label;
+					if (status !== undefined) updates.status = status;
+					
+					const response = await fetch(`${supabaseUrl}/rest/v1/sub_objectives?id=eq.${sub_objective_id}`, {
+						method: "PATCH",
+						headers: {
+							'apikey': supabaseKey,
+							'Authorization': `Bearer ${supabaseKey}`,
+							'Content-Type': 'application/json',
+						},
+						body: JSON.stringify(updates)
+					});
+					
+					const result = await response.json();
+					return {
+						content: [{
+							type: "text",
+							text: `Updated sub-objective ${sub_objective_id}: ${JSON.stringify(updates)}`
+						}]
+					};
+				} catch (error) {
+					return {
+						content: [{
+							type: "text",
+							text: `Error updating sub-objective: ${error.message}`
+						}]
+					};
+				}
+			}
+		);
+
+		// Get Current Graph State
+		this.server.tool(
+			"get_graph_state",
+			{
+				include_completed: z.boolean().optional().default(false),
+			},
+			async ({ include_completed }) => {
+				try {
+					// @ts-ignore
+					const supabaseUrl = env.SUPABASE_URL;
+					// @ts-ignore
+					const supabaseKey = env.SUPABASE_SERVICE_KEY;
+					
+					// Get nodes
+					let nodesQuery = `${supabaseUrl}/rest/v1/nodes?select=*`;
+					if (!include_completed) {
+						nodesQuery += `&status=neq.completed`;
+					}
+					
+					const nodesResponse = await fetch(nodesQuery, {
+						headers: {
+							'apikey': supabaseKey,
+							'Authorization': `Bearer ${supabaseKey}`,
+						}
+					});
+					const nodes = await nodesResponse.json();
+					
+					// Get sub-objectives
+					let subObjQuery = `${supabaseUrl}/rest/v1/sub_objectives?select=*&order=order_index`;
+					if (!include_completed) {
+						subObjQuery += `&status=neq.completed`;
+					}
+					
+					const subObjResponse = await fetch(subObjQuery, {
+						headers: {
+							'apikey': supabaseKey,
+							'Authorization': `Bearer ${supabaseKey}`,
+						}
+					});
+					const subObjectives = await subObjResponse.json();
+					
+					// Get edges
+					const edgesResponse = await fetch(`${supabaseUrl}/rest/v1/edges?select=*`, {
+						headers: {
+							'apikey': supabaseKey,
+							'Authorization': `Bearer ${supabaseKey}`,
+						}
+					});
+					const edges = await edgesResponse.json();
+					
+					// Build summary
+					const activeNodes = nodes.filter(n => n.status === 'in-progress');
+					const blockedNodes = nodes.filter(n => n.status === 'blocked');
+					
+					return {
+						content: [{
+							type: "text",
+							text: JSON.stringify({
+								summary: {
+									total_nodes: nodes.length,
+									active: activeNodes.map(n => n.label),
+									blocked: blockedNodes.map(n => n.label),
+									connections: edges.length
+								},
+								nodes: nodes,
+								sub_objectives_by_node: subObjectives.reduce((acc, sub) => {
+									if (!acc[sub.node_id]) acc[sub.node_id] = [];
+									acc[sub.node_id].push(sub);
+									return acc;
+								}, {})
+							}, null, 2)
+						}]
+					};
+				} catch (error) {
+					return {
+						content: [{
+							type: "text",
+							text: `Error getting graph state: ${error.message}`
+						}]
+					};
+				}
+			}
 		);
 	}
 }
