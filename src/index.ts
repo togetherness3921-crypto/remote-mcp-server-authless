@@ -9,16 +9,16 @@ export class MyMCP extends McpAgent {
         version: "1.0.0",
     });
 
-    private env: any;
     private googleTools: GoogleCalendarTools;
 
-    constructor() {
-        super();
+    constructor(state?: any, env?: any) {
+        super(state, env);  // Pass through to parent
         this.googleTools = new GoogleCalendarTools();
     }
 
-    async init(env: any) {
-        this.env = env;
+    async init() {
+        // @ts-ignore - env is available on the parent class
+        const env = this.env;
 
         // Register Google Calendar tools
         this.googleTools.registerTools(this.server, env);
@@ -38,8 +38,8 @@ export class MyMCP extends McpAgent {
             },
             async ({ node_id, label, status, expanded, position_x, position_y }) => {
                 try {
-                    const supabaseUrl = this.env.SUPABASE_URL;
-                    const supabaseKey = this.env.SUPABASE_SERVICE_KEY;
+                    const supabaseUrl = env.SUPABASE_URL;
+                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
                     
                     const updates: any = {};
                     if (label !== undefined) updates.label = label;
@@ -86,8 +86,8 @@ export class MyMCP extends McpAgent {
             },
             async ({ node_id, label, order_index }) => {
                 try {
-                    const supabaseUrl = this.env.SUPABASE_URL;
-                    const supabaseKey = this.env.SUPABASE_SERVICE_KEY;
+                    const supabaseUrl = env.SUPABASE_URL;
+                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
                     
                     const newSubObjective = {
                         id: `sub_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
@@ -135,8 +135,8 @@ export class MyMCP extends McpAgent {
             },
             async ({ sub_objective_id, label, status }) => {
                 try {
-                    const supabaseUrl = this.env.SUPABASE_URL;
-                    const supabaseKey = this.env.SUPABASE_SERVICE_KEY;
+                    const supabaseUrl = env.SUPABASE_URL;
+                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
                     
                     const updates: any = {};
                     if (label !== undefined) updates.label = label;
@@ -178,8 +178,8 @@ export class MyMCP extends McpAgent {
             },
             async ({ include_completed }) => {
                 try {
-                    const supabaseUrl = this.env.SUPABASE_URL;
-                    const supabaseKey = this.env.SUPABASE_SERVICE_KEY;
+                    const supabaseUrl = env.SUPABASE_URL;
+                    const supabaseKey = env.SUPABASE_SERVICE_KEY;
                     
                     // Get nodes
                     let nodesQuery = `${supabaseUrl}/rest/v1/nodes?select=*`;
@@ -254,17 +254,14 @@ export class MyMCP extends McpAgent {
     }
 }
 
+// This is the key change - use the static methods without creating instances
 export default {
-    async fetch(request: Request, env: Env, ctx: ExecutionContext) {
+    fetch(request: Request, env: Env, ctx: ExecutionContext) {
         const url = new URL(request.url);
-        const mcp = new MyMCP();
-        
         if (url.pathname === "/sse" || url.pathname === "/sse/message") {
-            await mcp.init(env);
             return MyMCP.serveSSE("/sse").fetch(request, env, ctx);
         }
         if (url.pathname === "/mcp") {
-            await mcp.init(env);
             return MyMCP.serve("/mcp").fetch(request, env, ctx);
         }
         return new Response("Not found", { status: 404 });
