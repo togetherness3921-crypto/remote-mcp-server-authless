@@ -2,30 +2,23 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { GoogleCalendarTools } from "./google-calendar-tools";
-
 // Hardcoded Supabase credentials
 const SUPABASE_URL = "https://cvzgxnspmmxxxwnxiydk.supabase.co";
 const SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2emd4bnNwbW14eHh3bnhpeWRrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1Njg3NzM1OCwiZXhwIjoyMDcyNDUzMzU4fQ.ZDl4Y3OQOeEeZ_QajGB6iRr0Xk3_Z7TMlI92yFmerzI";
-
 export class MyMCP extends McpAgent {
     server = new McpServer({
         name: "My MCP Server",
         version: "1.0.0",
     });
-
     private googleTools: GoogleCalendarTools;
-
     constructor(state?: any, env?: any) {
         super(state, env);
         this.googleTools = new GoogleCalendarTools();
     }
-
     async init() {
         // Register Google Calendar tools
         this.googleTools.registerTools(this.server, this.env);
-
         // GRAPH MANAGEMENT TOOLS FOR SUPABASE
-
         // Update Node Status
         this.server.tool(
             "update_node",
@@ -52,28 +45,50 @@ export class MyMCP extends McpAgent {
                             'apikey': SUPABASE_SERVICE_KEY,
                             'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                             'Content-Type': 'application/json',
+                            'Prefer': 'return=representation'  // Request the updated data back
                         },
                         body: JSON.stringify(updates)
                     });
                     
-                    const result = await response.json();
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`HTTP ${response.status}: ${errorText}`);
+                    }
+                    
+                    // Check if there's content to parse
+                    const contentType = response.headers.get('content-type');
+                    let result = null;
+                    if (contentType && contentType.includes('application/json')) {
+                        const text = await response.text();
+                        if (text) {
+                            result = JSON.parse(text);
+                        }
+                    }
+                    
                     return {
                         content: [{
                             type: "text",
-                            text: `Updated node ${node_id}: ${JSON.stringify(updates)}`
+                            text: JSON.stringify({
+                                success: true,
+                                node_id: node_id,
+                                updates: updates,
+                                result: result
+                            })
                         }]
                     };
                 } catch (error) {
                     return {
                         content: [{
                             type: "text",
-                            text: `Error updating node: ${error.message}`
+                            text: JSON.stringify({
+                                success: false,
+                                error: error.message
+                            })
                         }]
                     };
                 }
             }
         );
-
         // Add Sub-Objective to Node
         this.server.tool(
             "add_sub_objective",
@@ -97,29 +112,50 @@ export class MyMCP extends McpAgent {
                         headers: {
                             'apikey': SUPABASE_SERVICE_KEY,
                             'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-                            'Content-Type': 'application/json'
+                            'Content-Type': 'application/json',
+                            'Prefer': 'return=representation'  // Request the created data back
                         },
                         body: JSON.stringify(newSubObjective)
                     });
                     
-                    const result = await response.json();
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`HTTP ${response.status}: ${errorText}`);
+                    }
+                    
+                    // Check if there's content to parse
+                    const contentType = response.headers.get('content-type');
+                    let result = null;
+                    if (contentType && contentType.includes('application/json')) {
+                        const text = await response.text();
+                        if (text) {
+                            result = JSON.parse(text);
+                        }
+                    }
+                    
                     return {
                         content: [{
                             type: "text",
-                            text: `Added sub-objective: ${label} to node ${node_id}`
+                            text: JSON.stringify({
+                                success: true,
+                                sub_objective: newSubObjective,
+                                result: result
+                            })
                         }]
                     };
                 } catch (error) {
                     return {
                         content: [{
                             type: "text",
-                            text: `Error adding sub-objective: ${error.message}`
+                            text: JSON.stringify({
+                                success: false,
+                                error: error.message
+                            })
                         }]
                     };
                 }
             }
         );
-
         // Update Sub-Objective Status
         this.server.tool(
             "update_sub_objective",
@@ -140,28 +176,50 @@ export class MyMCP extends McpAgent {
                             'apikey': SUPABASE_SERVICE_KEY,
                             'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
                             'Content-Type': 'application/json',
+                            'Prefer': 'return=representation'  // Request the updated data back
                         },
                         body: JSON.stringify(updates)
                     });
                     
-                    const result = await response.json();
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`HTTP ${response.status}: ${errorText}`);
+                    }
+                    
+                    // Check if there's content to parse
+                    const contentType = response.headers.get('content-type');
+                    let result = null;
+                    if (contentType && contentType.includes('application/json')) {
+                        const text = await response.text();
+                        if (text) {
+                            result = JSON.parse(text);
+                        }
+                    }
+                    
                     return {
                         content: [{
                             type: "text",
-                            text: `Updated sub-objective ${sub_objective_id}: ${JSON.stringify(updates)}`
+                            text: JSON.stringify({
+                                success: true,
+                                sub_objective_id: sub_objective_id,
+                                updates: updates,
+                                result: result
+                            })
                         }]
                     };
                 } catch (error) {
                     return {
                         content: [{
                             type: "text",
-                            text: `Error updating sub-objective: ${error.message}`
+                            text: JSON.stringify({
+                                success: false,
+                                error: error.message
+                            })
                         }]
                     };
                 }
             }
         );
-
         // Get Current Graph State
         this.server.tool(
             "get_graph_state",
@@ -242,7 +300,6 @@ export class MyMCP extends McpAgent {
         );
     }
 }
-
 export default {
     fetch(request: Request, env: Env, ctx: ExecutionContext) {
         const url = new URL(request.url);
