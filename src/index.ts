@@ -48,13 +48,13 @@ export class MyMCP extends McpAgent {
     });
     private googleTools: GoogleCalendarTools;
     constructor(state?: any, env?: any) {
-        super(state, env); 
+        super(state, env);
         this.googleTools = new GoogleCalendarTools();
     }
     async init() {
         // Register Google Calendar tools
         this.googleTools.registerTools(this.server, this.env);
-        
+
         // --- NEW GRAPH MANAGEMENT TOOLS (JSONB) ---
 
         // Get Current Graph State
@@ -103,7 +103,7 @@ export class MyMCP extends McpAgent {
 
                     // Apply updates to the specific node
                     Object.assign(graphData.nodes[node_id], updates);
-                    
+
                     if (updates.status === 'completed' && !graphData.nodes[node_id].completed_at) {
                         graphData.nodes[node_id].completed_at = new Date().toISOString();
                     }
@@ -149,7 +149,7 @@ export class MyMCP extends McpAgent {
                     }
 
                     // --- Percentage Squishing Logic ---
-                    const otherParents = Object.entries(graphData.nodes).filter(([id, node]: [string, any]) => 
+                    const otherParents = Object.entries(graphData.nodes).filter(([id, node]: [string, any]) =>
                         node.parents?.includes(child_id) && id !== new_node.id
                     );
 
