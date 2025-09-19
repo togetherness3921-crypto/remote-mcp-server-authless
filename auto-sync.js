@@ -8,26 +8,39 @@ console.log('💡 Tip: Press Ctrl+C to stop auto-sync');
 // Ignore node_modules, .git, and other unnecessary directories
 const watcher = chokidar.watch('.', {
   ignored: [
+    // Core ignores
     '**/node_modules/**',
-    '**/.git/**',           // Exclude ALL .git files and folders
     '**/dist/**',
     '**/build/**',
-    '**/.next/**',
-    '**/coverage/**',
+
+    // COMPLETE GIT ISOLATION - multiple patterns for Windows compatibility
+    '**/.git',
+    '**/.git/**',
+    '.git',
+    '.git/**',
+    /\.git/,
+
+    // Auto-sync files
+    'auto-sync.cjs',
+    'auto-sync.js',
+    'start-auto-sync.bat',
+    'sync-all.cjs',
+
+    // Other files to ignore
     '**/*.log',
-    'auto-sync.js',         // Don't watch this script itself
-    'start-auto-sync.bat',  // Don't watch the batch file
-    'test-auto-sync.txt',   // Don't watch test files
-    '**/.DS_Store',         // Mac files
-    '**/Thumbs.db',         // Windows files
-    '**/*.tmp',             // Temporary files
-    '**/.env*'              // Environment files
+    '**/*.tmp',
+    '**/.DS_Store',
+    '**/Thumbs.db',
+    '**/.env*'
   ],
   ignoreInitial: true,
   persistent: true,
-  // Additional options to prevent watching git-related changes
   usePolling: false,
-  atomic: true
+  atomic: false,  // Disable atomic to reduce .git interference
+  awaitWriteFinish: {
+    stabilityThreshold: 100,
+    pollInterval: 10
+  }
 });
 
 let timeoutId;
