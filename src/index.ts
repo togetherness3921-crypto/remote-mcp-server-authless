@@ -80,6 +80,52 @@ export class MyMCP extends McpAgent {
                 }
             }
         );
+
+        // Update Node in Graph
+        this.server.tool(
+            "update_node",
+            {
+                node_id: z.string(),
+                updates: z.object({
+                    label: z.string().optional(),
+                    status: z.enum(["not-started", "in-progress", "completed", "blocked"]).optional(),
+                    percentage_of_child: z.number().optional(),
+                })
+            },
+            async ({ node_id, updates }) => {
+                try {
+                    const doc = await getGraphDocument();
+                    const graphData = doc.data;
+
+                    if (!graphData.nodes || !graphData.nodes[node_id]) {
+                        throw new Error(`Node with id ${node_id} not found.`);
+                    }
+
+                    // Apply updates to the specific node
+                    Object.assign(graphData.nodes[node_id], updates);
+                    
+                    if (updates.status === 'completed' && !graphData.nodes[node_id].completed_at) {
+                        graphData.nodes[node_id].completed_at = new Date().toISOString();
+                    }
+
+                    await updateGraphDocument(graphData);
+
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `Successfully updated node ${node_id}.`
+                        }]
+                    };
+                } catch (error) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `Error updating node: ${error.message}`
+                        }]
+                    };
+                }
+            }
+        );
     }
 }
 export default {
