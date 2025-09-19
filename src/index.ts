@@ -126,6 +126,70 @@ export class MyMCP extends McpAgent {
                 }
             }
         );
+
+        // Add Node to Graph with Percentage Squishing
+        this.server.tool(
+            "add_node",
+            {
+                child_id: z.string(),
+                new_node: z.object({
+                    id: z.string(),
+                    label: z.string(),
+                    type: z.string().optional().default("objectiveNode"),
+                    percentage_of_child: z.number(),
+                })
+            },
+            async ({ child_id, new_node }) => {
+                try {
+                    const doc = await getGraphDocument();
+                    const graphData = doc.data;
+
+                    if (!graphData.nodes || !graphData.nodes[child_id]) {
+                        throw new Error(`Child node with id ${child_id} not found.`);
+                    }
+
+                    // --- Percentage Squishing Logic ---
+                    const otherParents = Object.entries(graphData.nodes).filter(([id, node]: [string, any]) => 
+                        node.parents?.includes(child_id) && id !== new_node.id
+                    );
+
+                    const newPerc = new_node.percentage_of_child;
+                    if (newPerc < 0 || newPerc > 100) {
+                        throw new Error("New node's percentage must be between 0 and 100.");
+                    }
+
+                    const remainingPerc = 100 - newPerc;
+                    const percentPerOtherParent = otherParents.length > 0 ? remainingPerc / otherParents.length : 0;
+
+                    for (const [id, node] of otherParents) {
+                        graphData.nodes[id].percentage_of_child = percentPerOtherParent;
+                    }
+
+                    // --- Add New Node ---
+                    graphData.nodes[new_node.id] = {
+                        ...new_node,
+                        parents: [child_id],
+                        status: "not-started",
+                    };
+
+                    await updateGraphDocument(graphData);
+
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `Successfully added node ${new_node.id} and re-balanced parent percentages for child ${child_id}.`
+                        }]
+                    };
+                } catch (error) {
+                    return {
+                        content: [{
+                            type: "text",
+                            text: `Error adding node: ${error.message}`
+                        }]
+                    };
+                }
+            }
+        );
     }
 }
 export default {
