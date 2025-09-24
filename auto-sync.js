@@ -85,7 +85,7 @@ function autoCommitAndPush() {
             console.log(`✅ Committed: ${commitMessage}`);
 
             checkAndDeployDatabase(() => {
-              exec('git push --force origin master', (pushError, pushStdout, pushStderr) => {
+              exec('git push --force origin main', (pushError, pushStdout, pushStderr) => {
                 if (pushError) {
                   console.error('❌ Error pushing to GitHub:', pushError.message);
                   if (pushStderr.includes('error: src refspec')) {
