@@ -89,7 +89,7 @@ interface Node {
     true_percentage_of_total?: number;
 }
 
-// Define the structure of the entire graph document 
+// Define the structure of the entire graph document  
 interface GraphDocument {
     nodes: Record<string, Node>;
     viewport: {

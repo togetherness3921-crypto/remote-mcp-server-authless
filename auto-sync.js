@@ -89,7 +89,7 @@ function autoCommitAndPush() {
                 if (pushError) {
                   console.error('❌ Error pushing to GitHub:', pushError.message);
                   if (pushStderr.includes('error: src refspec')) {
-                    console.log('ℹ️  It looks like the branch name differs locally. Skipping push until resolved.');
+                    console.log('ℹ️  Local branch name differs. Continuing to retry on subsequent changes.');
                   }
                   pendingChanges = false;
                   return;
