@@ -299,7 +299,7 @@ export class MyMCP extends McpAgent {
                                 current_date: new Date().toISOString(),
                                 score_context: calculateScores(doc.nodes),
                                 context: resultGraphWithPercentages
-                            })
+                            }, null, 2)
                         }]
                     };
                 } catch (error: any) {
