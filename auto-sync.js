@@ -14,11 +14,11 @@ function sync() {
     if (pullError && !pullError.message.includes('up to date')) {
       console.warn('[SUB] ⚠️ Pull completed with warnings:', pullError.message);
     }
-    
+
     console.log('[SUB] 📝 Committing local changes...');
     exec('git add --all && git commit -m "Auto-sync" --quiet', (commitError) => {
       // Ignore "nothing to commit" errors
-      
+
       console.log('[SUB] 🚀 Pushing to GitHub...');
       exec('git push origin main', (pushError) => {
         if (pushError) {
