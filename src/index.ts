@@ -542,12 +542,55 @@ function corsPreflight() {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
+async function handleTranscription(request: Request, env: Env) {
+    if (request.method !== 'POST') {
+        return new Response('Method Not Allowed', { status: 405, headers: CORS_HEADERS });
+    }
+
+    const groqApiKey = env.GROQ_API_KEY;
+    if (!groqApiKey) {
+        return new Response('API key for Groq not configured', { status: 500, headers: CORS_HEADERS });
+    }
+
+    const formData = await request.formData();
+    const file = formData.get('file');
+
+    if (!file) {
+        return new Response('No file uploaded', { status: 400, headers: CORS_HEADERS });
+    }
+
+    const body = new FormData();
+    body.append('file', file);
+    body.append('model', 'whisper-large-v3');
+
+    const groqResponse = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${groqApiKey}`,
+        },
+        body,
+    });
+
+    return withCors(
+        new Response(groqResponse.body, {
+            status: groqResponse.status,
+            statusText: groqResponse.statusText,
+            headers: { 'Content-Type': 'application/json' },
+        })
+    );
+}
+
+
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext) {
         const url = new URL(request.url);
 
         if (request.method === 'OPTIONS') {
             return corsPreflight();
+        }
+
+        if (url.pathname === '/api/transcribe') {
+            return handleTranscription(request, env);
         }
 
         let response: Response;
