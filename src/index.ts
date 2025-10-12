@@ -9,62 +9,6 @@ const SUPABASE_URL = "https://cvzgxnspmmxxxwnxiydk.supabase.co";
 const SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2emd4bnNwbW14eHh3bnhpeWRrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1Njg3NzM1OCwiZXhwIjoyMDcyNDUzMzU4fQ.ZDl4Y3OQOeEeZ_QajGB6iRr0Xk3_Z7TMlI92yFmerzI";
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
-type RequiredEnvKey =
-    | "CLOUDFLARE_API_TOKEN"
-    | "CLOUDFLARE_ACCOUNT_ID"
-    | "CLOUDFLARE_PROJECT_NAME"
-    | "GH_TOKEN"
-    | "GH_REPO_OWNER"
-    | "GH_REPO_NAME"
-    | "SUPABASE_URL"
-    | "SUPABASE_SERVICE_KEY";
-
-type OptionalEnvKey = "GROQ_API_KEY";
-
-type WorkerEnv = Env & {
-    [K in RequiredEnvKey]: string;
-} & {
-    [K in OptionalEnvKey]?: string;
-};
-
-function requireEnv(env: WorkerEnv, key: RequiredEnvKey): string {
-    const value = env[key];
-    if (!value || typeof value !== "string") {
-        throw new Error(`Missing required environment variable: ${key}`);
-    }
-    return value;
-}
-
-async function readJsonBody(response: Response): Promise<any> {
-    const text = await response.text();
-    if (!text) {
-        return null;
-    }
-    try {
-        return JSON.parse(text);
-    } catch {
-        return text;
-    }
-}
-
-function normalizeSha(value: string | undefined | null): string | null {
-    if (!value || typeof value !== "string") {
-        return null;
-    }
-    return value.trim();
-}
-
-function getErrorMessage(error: unknown): string {
-    if (error instanceof Error && typeof error.message === "string") {
-        return error.message;
-    }
-    try {
-        return String(error);
-    } catch {
-        return "Unknown error";
-    }
-}
-
 type JSONPatch = Operation[];
 
 function calculateTruePercentages(nodes: Record<string, Node>): Record<string, Node> {
@@ -132,89 +76,6 @@ function calculateScores(nodes: Record<string, Node>): object {
     };
 }
 
-async function assertOk<T = unknown>(response: Response, context: string): Promise<T | null> {
-    const payload = await readJsonBody(response);
-    if (response.ok) {
-        return payload as T;
-    }
-    const details = typeof payload === "string" ? payload : JSON.stringify(payload, null, 2);
-    throw new Error(`${context} failed with status ${response.status}: ${details}`);
-}
-
-async function promoteCloudflareDeployment(env: WorkerEnv, commitSha: string) {
-    const accountId = requireEnv(env, "CLOUDFLARE_ACCOUNT_ID");
-    const projectName = requireEnv(env, "CLOUDFLARE_PROJECT_NAME");
-    const apiToken = requireEnv(env, "CLOUDFLARE_API_TOKEN");
-
-    const listEndpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments?sha=${commitSha}`;
-    const listResponse = await fetch(listEndpoint, {
-        method: "GET",
-        headers: {
-            "Authorization": `Bearer ${apiToken}`,
-            "Content-Type": "application/json",
-        },
-    });
-
-    const listPayload = await assertOk<{ result: Array<{ id: string; production_branch: string | null; environment: string }> }>(listResponse, "Cloudflare deployments lookup");
-    const deployment = listPayload?.result?.find(item => typeof item?.id === "string");
-
-    if (!deployment) {
-        throw new Error(`Cloudflare deployment not found for commit ${commitSha}`);
-    }
-
-    const promoteEndpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments/${deployment.id}/promote`;
-    const promoteResponse = await fetch(promoteEndpoint, {
-        method: "POST",
-        headers: {
-            "Authorization": `Bearer ${apiToken}`,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ environment: "production" }),
-    });
-
-    await assertOk(promoteResponse, "Cloudflare promotion");
-}
-
-async function forceUpdateGitHubMain(env: WorkerEnv, commitSha: string) {
-    const token = requireEnv(env, "GH_TOKEN");
-    const owner = requireEnv(env, "GH_REPO_OWNER");
-    const repo = requireEnv(env, "GH_REPO_NAME");
-
-    const endpoint = `https://api.github.com/repos/${owner}/${repo}/git/refs/heads/main`;
-    const response = await fetch(endpoint, {
-        method: "PATCH",
-        headers: {
-            "Authorization": `Bearer ${token}`,
-            "Content-Type": "application/json",
-            "Accept": "application/vnd.github+json",
-        },
-        body: JSON.stringify({ sha: commitSha, force: true }),
-    });
-
-    await assertOk(response, "GitHub ref update");
-}
-
-async function updateSupabaseBuildStatus(env: WorkerEnv, prNumber: number, commitSha: string) {
-    const supabaseUrl = requireEnv(env, "SUPABASE_URL");
-    const serviceKey = requireEnv(env, "SUPABASE_SERVICE_KEY");
-
-    const response = await fetch(`${supabaseUrl}/rest/v1/preview_builds?pr_number=eq.${prNumber}&commit_sha=eq.${commitSha}`, {
-        method: "PATCH",
-        headers: {
-            "apikey": serviceKey,
-            "Authorization": `Bearer ${serviceKey}`,
-            "Content-Type": "application/json",
-            "Prefer": "return=representation",
-        },
-        body: JSON.stringify({ status: "committed" }),
-    });
-
-    const payload = await assertOk<{ status: string }[]>(response, "Supabase status update");
-    if (!payload || !Array.isArray(payload) || payload.length === 0) {
-        throw new Error("Supabase status update completed but no rows were updated.");
-    }
-}
-
 
 // Define the structure of a node in the graph
 interface Node {
@@ -237,11 +98,6 @@ interface GraphDocument {
         zoom: number;
     };
     historical_progress: Record<string, any>;
-}
-
-interface PromoteRequestBody {
-    prNumber?: number;
-    commitSha?: string;
 }
 
 
@@ -686,17 +542,7 @@ function corsPreflight() {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
 }
 
-function buildJsonResponse(status: number, data: Record<string, unknown>) {
-    return new Response(JSON.stringify(data), {
-        status,
-        headers: {
-            "Content-Type": "application/json",
-            ...CORS_HEADERS,
-        },
-    });
-}
-
-async function handleTranscription(request: Request, env: WorkerEnv) {
+async function handleTranscription(request: Request, env: Env) {
     if (request.method !== 'POST') {
         return new Response('Method Not Allowed', { status: 405, headers: CORS_HEADERS });
     }
@@ -736,7 +582,7 @@ async function handleTranscription(request: Request, env: WorkerEnv) {
 
 
 export default {
-    async fetch(request: Request, env: WorkerEnv, ctx: ExecutionContext) {
+    async fetch(request: Request, env: Env, ctx: ExecutionContext) {
         const url = new URL(request.url);
 
         if (request.method === 'OPTIONS') {
@@ -745,75 +591,6 @@ export default {
 
         if (url.pathname === '/api/transcribe') {
             return handleTranscription(request, env);
-        }
-
-        if (url.pathname === '/api/promote' && request.method === 'POST') {
-            try {
-                const body = await request.json() as PromoteRequestBody | null;
-                const prNumber = body?.prNumber;
-                const commitSha = body?.commitSha;
-
-                if (typeof prNumber !== 'number' || Number.isNaN(prNumber) || prNumber <= 0) {
-                    return buildJsonResponse(400, {
-                        success: false,
-                        error: 'Invalid PR number provided.',
-                    });
-                }
-
-                const normalizedSha = normalizeSha(commitSha);
-                if (!normalizedSha) {
-                    return buildJsonResponse(400, {
-                        success: false,
-                        error: 'commitSha is required.',
-                    });
-                }
-
-                console.log(`[Promote] Starting promotion for PR #${prNumber} at ${normalizedSha}`);
-
-                try {
-                    await promoteCloudflareDeployment(env, normalizedSha);
-                    console.log('[Promote] Cloudflare promotion succeeded');
-                } catch (error) {
-                    const message = getErrorMessage(error);
-                    console.error('[Promote] Cloudflare promotion failed', message);
-                    return buildJsonResponse(502, {
-                        success: false,
-                        error: `Cloudflare promotion failed: ${message}`,
-                    });
-                }
-
-                try {
-                    await forceUpdateGitHubMain(env, normalizedSha);
-                    console.log('[Promote] GitHub ref update succeeded');
-                } catch (error) {
-                    const message = getErrorMessage(error);
-                    console.error('[Promote] GitHub ref update failed', message);
-                    return buildJsonResponse(502, {
-                        success: false,
-                        error: `GitHub ref update failed: ${message}`,
-                    });
-                }
-
-                try {
-                    await updateSupabaseBuildStatus(env, prNumber, normalizedSha);
-                    console.log('[Promote] Supabase status update succeeded');
-                } catch (error) {
-                    const message = getErrorMessage(error);
-                    console.error('[Promote] Supabase status update failed', message);
-                    return buildJsonResponse(502, {
-                        success: false,
-                        error: `Supabase status update failed: ${message}`,
-                    });
-                }
-
-                return buildJsonResponse(200, { success: true });
-            } catch (error) {
-                console.error('[Promote] Failed', error);
-                return buildJsonResponse(500, {
-                    success: false,
-                    error: getErrorMessage(error),
-                });
-            }
         }
 
         let response: Response;
