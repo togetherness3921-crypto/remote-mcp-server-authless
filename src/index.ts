@@ -146,8 +146,24 @@ async function promoteCloudflareDeployment(env: WorkerEnv, commitSha: string) {
     const projectName = requireEnv(env, "CLOUDFLARE_PROJECT_NAME");
     const apiToken = requireEnv(env, "CLOUDFLARE_API_TOKEN");
 
-    const endpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments/${commitSha}/promote`;
-    const response = await fetch(endpoint, {
+    const listEndpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments?sha=${commitSha}`;
+    const listResponse = await fetch(listEndpoint, {
+        method: "GET",
+        headers: {
+            "Authorization": `Bearer ${apiToken}`,
+            "Content-Type": "application/json",
+        },
+    });
+
+    const listPayload = await assertOk<{ result: Array<{ id: string; production_branch: string | null; environment: string }> }>(listResponse, "Cloudflare deployments lookup");
+    const deployment = listPayload?.result?.find(item => typeof item?.id === "string");
+
+    if (!deployment) {
+        throw new Error(`Cloudflare deployment not found for commit ${commitSha}`);
+    }
+
+    const promoteEndpoint = `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects/${projectName}/deployments/${deployment.id}/promote`;
+    const promoteResponse = await fetch(promoteEndpoint, {
         method: "POST",
         headers: {
             "Authorization": `Bearer ${apiToken}`,
@@ -156,7 +172,7 @@ async function promoteCloudflareDeployment(env: WorkerEnv, commitSha: string) {
         body: JSON.stringify({ environment: "production" }),
     });
 
-    await assertOk(response, "Cloudflare promotion");
+    await assertOk(promoteResponse, "Cloudflare promotion");
 }
 
 async function forceUpdateGitHubMain(env: WorkerEnv, commitSha: string) {
