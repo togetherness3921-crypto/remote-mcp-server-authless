@@ -100,6 +100,7 @@ interface GraphDocument {
     historical_progress: Record<string, any>;
 }
 
+
 export class MyMCP extends McpAgent {
     server = new McpServer({
         name: "My MCP Server",
@@ -413,9 +414,8 @@ export class MyMCP extends McpAgent {
         // 3. Write Tool: patch_graph_document()
         this.server.tool(
             "patch_graph_document",
-            "Applies a sequence of JSON Patch operations to the graph document to add, remove, or update nodes and their properties.",
             {
-                patches: z.string().describe('A string containing a valid JSON array of patch operations, following RFC 6902. Example: `[{"op": "add", "path": "/nodes/new_node", "value": {"label": "New Node"}}]`'),
+                patches: z.any(),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
