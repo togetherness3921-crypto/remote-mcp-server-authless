@@ -100,6 +100,12 @@ interface GraphDocument {
     historical_progress: Record<string, any>;
 }
 
+const patchOperationSchema = z.object({
+    op: z.enum(['add', 'remove', 'replace', 'move', 'copy', 'test']),
+    path: z.string().describe("A JSON Pointer path to the location to operate on."),
+    value: z.any().optional().describe("The value to apply. Required for 'add' and 'replace' operations."),
+});
+
 
 export class MyMCP extends McpAgent {
     server = new McpServer({
@@ -414,8 +420,9 @@ export class MyMCP extends McpAgent {
         // 3. Write Tool: patch_graph_document()
         this.server.tool(
             "patch_graph_document",
+            "Applies a sequence of JSON Patch operations to the graph document to add, remove, or update nodes and their properties.",
             {
-                patches: z.any(),
+                patches: z.array(patchOperationSchema).describe("An array of JSON Patch operations to apply to the document."),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
