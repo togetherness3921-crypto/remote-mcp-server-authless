@@ -111,6 +111,14 @@ export class MyMCP extends McpAgent {
         super(state, env);
     }
 
+    private get supabaseHeaders() {
+        return {
+            'apikey': SUPABASE_SERVICE_KEY,
+            'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+            'Content-Type': 'application/json',
+        };
+    }
+
     private async getGraphDocument(): Promise<GraphDocument> {
         const response = await fetch(`${SUPABASE_URL}/rest/v1/graph_documents?id=eq.main&select=data`, {
             headers: {
@@ -135,11 +143,7 @@ export class MyMCP extends McpAgent {
     private async updateGraphDocument(document: GraphDocument): Promise<void> {
         const response = await fetch(`${SUPABASE_URL}/rest/v1/graph_documents?id=eq.main`, {
             method: "PATCH",
-            headers: {
-                'apikey': SUPABASE_SERVICE_KEY,
-                'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
-                'Content-Type': 'application/json',
-            },
+            headers: this.supabaseHeaders,
             body: JSON.stringify({ data: document })
         });
 
@@ -147,6 +151,77 @@ export class MyMCP extends McpAgent {
             const errorText = await response.text();
             throw new Error(`Failed to update graph document: ${errorText}`);
         }
+    }
+
+    private async insertGraphDocumentVersion(document: GraphDocument): Promise<string> {
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/graph_document_versions`, {
+            method: "POST",
+            headers: {
+                ...this.supabaseHeaders,
+                'Prefer': 'return=representation',
+            },
+            body: JSON.stringify({ data: document })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to insert graph document version: ${errorText}`);
+        }
+
+        const data: { id: string }[] = await response.json();
+        if (!data || data.length === 0 || !data[0].id) {
+            throw new Error("Failed to retrieve new graph document version id.");
+        }
+
+        return data[0].id;
+    }
+
+    private async getGraphDocumentVersionById(versionId: string): Promise<GraphDocument | null> {
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/graph_document_versions?id=eq.${versionId}&select=data`, {
+            headers: {
+                'apikey': SUPABASE_SERVICE_KEY,
+                'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+            }
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to fetch graph document version: ${errorText}`);
+        }
+
+        const data: { data: GraphDocument }[] = await response.json();
+        if (!data || data.length === 0) {
+            return null;
+        }
+
+        return data[0].data;
+    }
+
+    private async getEarliestGraphDocumentVersionId(): Promise<string | null> {
+        const response = await fetch(`${SUPABASE_URL}/rest/v1/graph_document_versions?select=id&order=created_at.asc&limit=1`, {
+            headers: {
+                'apikey': SUPABASE_SERVICE_KEY,
+                'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+            }
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Failed to fetch earliest graph document version: ${errorText}`);
+        }
+
+        const data: { id: string }[] = await response.json();
+        if (!data || data.length === 0) {
+            return null;
+        }
+
+        return data[0].id;
+    }
+
+    private computeScoreContext(document: GraphDocument): object {
+        const docCopy = JSON.parse(JSON.stringify(document)) as GraphDocument;
+        docCopy.nodes = calculateTruePercentages(docCopy.nodes);
+        return calculateScores(docCopy.nodes);
     }
 
 
@@ -415,43 +490,43 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "patch_graph_document",
             {
-                patches: z.any(),
+                patches: z.string().describe("JSON stringified RFC 6902 JSON Patch operations to apply to the live graph document."),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
                 try {
                     console.log("Fetching graph document for patching...");
-                    let doc = await this.getGraphDocument();
+                    const doc = await this.getGraphDocument();
                     console.log("Successfully fetched graph document.");
 
                     const originalDoc = JSON.parse(JSON.stringify(doc)); // Deep copy
 
                     let parsedPatches: JSONPatch;
-                    if (typeof patches === 'string') {
-                        try {
-                            parsedPatches = JSON.parse(patches);
-                        } catch (e) {
-                            throw new Error("Invalid JSON format for patches string.");
-                        }
-                    } else {
-                        parsedPatches = patches as JSONPatch;
+                    try {
+                        parsedPatches = JSON.parse(patches);
+                    } catch (e) {
+                        throw new Error("Invalid JSON format for patches string.");
                     }
 
                     if (!Array.isArray(parsedPatches)) {
                         throw new Error("Patch sequence must be an array.");
                     }
 
-                    // Apply the patches and calculate percentages
-                    let patchedDoc = applyPatch(doc, parsedPatches, true, false).newDocument;
+                    let patchedDoc: GraphDocument;
+                    try {
+                        patchedDoc = applyPatch(doc, parsedPatches, true, false).newDocument as GraphDocument;
+                    } catch (patchError: any) {
+                        throw new Error(`Failed to apply patches: ${patchError.message || patchError}`);
+                    }
+
                     if (!patchedDoc) {
                         throw new Error("Patch application failed.");
                     }
-                    patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
 
+                    patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
 
                     // --- Percentage Squishing Logic ---
 
-                    // Helper to build a map of parent -> children
                     const buildParentToChildrenMap = (document: GraphDocument): Record<string, string[]> => {
                         const map: Record<string, string[]> = {};
                         for (const nodeId in document.nodes) {
@@ -471,7 +546,6 @@ export class MyMCP extends McpAgent {
 
                     const affectedParents = new Set<string>();
 
-                    // Find parents with new children
                     for (const parentId in newParentMap) {
                         const originalChildren = originalParentMap[parentId] || [];
                         const newChildren = newParentMap[parentId];
@@ -480,7 +554,6 @@ export class MyMCP extends McpAgent {
                         }
                     }
 
-                    // Recalculate percentages for children of affected parents
                     affectedParents.forEach(parentId => {
                         const children = newParentMap[parentId];
                         if (children && children.length > 0) {
@@ -493,17 +566,41 @@ export class MyMCP extends McpAgent {
                         }
                     });
 
+                    patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
+
+                    const normalizedOriginalDoc: GraphDocument = JSON.parse(JSON.stringify(originalDoc));
+                    normalizedOriginalDoc.nodes = calculateTruePercentages(normalizedOriginalDoc.nodes);
+
+                    const hasChanges = JSON.stringify(normalizedOriginalDoc) !== JSON.stringify(patchedDoc);
+
+                    if (!hasChanges) {
+                        console.log("No changes detected after applying patches. Skipping update and snapshot.");
+                        return {
+                            content: [{
+                                type: "text",
+                                text: JSON.stringify({
+                                    success: true,
+                                    score_context: this.computeScoreContext(normalizedOriginalDoc),
+                                    result: normalizedOriginalDoc
+                                })
+                            }]
+                        };
+                    }
 
                     await this.updateGraphDocument(patchedDoc);
                     console.log("Successfully updated graph document in Supabase.");
+
+                    const graphDocumentVersionId = await this.insertGraphDocumentVersion(patchedDoc);
+                    console.log(`Inserted new graph document version with id ${graphDocumentVersionId}.`);
 
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
                                 success: true,
-                                score_context: calculateScores(patchedDoc.nodes),
-                                result: patchedDoc
+                                score_context: this.computeScoreContext(patchedDoc),
+                                result: patchedDoc,
+                                graph_document_version_id: graphDocumentVersionId
                             })
                         }]
                     };
@@ -514,6 +611,176 @@ export class MyMCP extends McpAgent {
                             type: "text",
                             text: JSON.stringify({
                                 tool: "patch_graph_document",
+                                status: "failed",
+                                error: error.message,
+                                stack: error.stack
+                            })
+                        }]
+                    };
+                }
+            }
+        );
+
+        this.server.tool(
+            "get_graph_document_version",
+            {
+                version_id: z.string().uuid().describe("The UUID of the historical graph document version to fetch."),
+            },
+            async ({ version_id }) => {
+                console.log(`Attempting to execute get_graph_document_version for version ${version_id}...`);
+                try {
+                    const version = await this.getGraphDocumentVersionById(version_id);
+                    if (!version) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: JSON.stringify({
+                                    tool: "get_graph_document_version",
+                                    status: "failed",
+                                    error: "Version not found"
+                                })
+                            }]
+                        };
+                    }
+
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                success: true,
+                                result: version
+                            })
+                        }]
+                    };
+                } catch (error: any) {
+                    console.error("Caught error in get_graph_document_version:", error);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                tool: "get_graph_document_version",
+                                status: "failed",
+                                error: error.message,
+                                stack: error.stack
+                            })
+                        }]
+                    };
+                }
+            }
+        );
+
+        this.server.tool(
+            "set_graph_document_to_version",
+            {
+                version_id: z.string().uuid().describe("The UUID of the historical graph document version to set as the current live graph."),
+            },
+            async ({ version_id }) => {
+                console.log(`Attempting to execute set_graph_document_to_version for version ${version_id}...`);
+                try {
+                    const version = await this.getGraphDocumentVersionById(version_id);
+                    if (!version) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: JSON.stringify({
+                                    tool: "set_graph_document_to_version",
+                                    status: "failed",
+                                    error: "Version not found"
+                                })
+                            }]
+                        };
+                    }
+
+                    const currentDoc = await this.getGraphDocument();
+                    const hasDifference = JSON.stringify(currentDoc) !== JSON.stringify(version);
+
+                    if (!hasDifference) {
+                        console.log("Live graph already matches requested version. Skipping update and snapshot.");
+                        return {
+                            content: [{
+                                type: "text",
+                                text: JSON.stringify({
+                                    success: true,
+                                    result: currentDoc,
+                                    score_context: this.computeScoreContext(currentDoc)
+                                })
+                            }]
+                        };
+                    }
+
+                    await this.updateGraphDocument(version);
+                    const newVersionId = await this.insertGraphDocumentVersion(version);
+                    console.log(`Live graph updated to version ${version_id}. Inserted new version ${newVersionId}.`);
+
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                success: true,
+                                result: version,
+                                score_context: this.computeScoreContext(version),
+                                graph_document_version_id: newVersionId
+                            })
+                        }]
+                    };
+                } catch (error: any) {
+                    console.error("Caught error in set_graph_document_to_version:", error);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                tool: "set_graph_document_to_version",
+                                status: "failed",
+                                error: error.message,
+                                stack: error.stack
+                            })
+                        }]
+                    };
+                }
+            }
+        );
+
+        this.server.tool(
+            "get_or_create_default_graph_version",
+            {},
+            async () => {
+                console.log("Attempting to execute get_or_create_default_graph_version...");
+                try {
+                    const existingVersionId = await this.getEarliestGraphDocumentVersionId();
+                    if (existingVersionId) {
+                        return {
+                            content: [{
+                                type: "text",
+                                text: JSON.stringify({
+                                    success: true,
+                                    default_graph_document_version_id: existingVersionId,
+                                    was_created_now: false
+                                })
+                            }]
+                        };
+                    }
+
+                    const currentDocument = await this.getGraphDocument();
+                    const newVersionId = await this.insertGraphDocumentVersion(currentDocument);
+                    console.log(`Created default graph version with id ${newVersionId}.`);
+
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                success: true,
+                                default_graph_document_version_id: newVersionId,
+                                was_created_now: true
+                            })
+                        }]
+                    };
+                } catch (error: any) {
+                    console.error("Caught error in get_or_create_default_graph_version:", error);
+                    return {
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                tool: "get_or_create_default_graph_version",
                                 status: "failed",
                                 error: error.message,
                                 stack: error.stack
