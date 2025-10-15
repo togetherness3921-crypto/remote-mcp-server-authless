@@ -1,5 +1,6 @@
 import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Operation, applyPatch } from "fast-json-patch";
 import { createClient } from '@supabase/supabase-js';
@@ -208,79 +209,197 @@ export class MyMCP extends McpAgent {
 
 
     async init() {
+        type MCPCallToolResult = z.infer<typeof CallToolResultSchema>;
+
+        const createToolResponse = (
+            tool: string,
+            success: boolean,
+            data?: Record<string, unknown>,
+            error?: { message: string; code?: string }
+        ): MCPCallToolResult => {
+            const payload: Record<string, unknown> = { tool, success };
+            if (data !== undefined) {
+                payload.data = data;
+            }
+            if (error !== undefined) {
+                payload.error = error;
+            }
+
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: JSON.stringify(payload),
+                    },
+                ],
+            };
+        };
+
+        const resolveInstructionId = (instructionId?: string) => instructionId?.trim() || "main";
+
+        const getSystemInstructionsParams = z.object({
+            instruction_id: z
+                .string()
+                .optional()
+                .describe("Instruction identifier to read. Defaults to 'main'."),
+        });
+
+        type GetSystemInstructionsArgs = z.infer<typeof getSystemInstructionsParams>;
+
+        const updateSystemInstructionsParams = z.object({
+            new_instructions_content: z
+                .string()
+                .describe("The complete new content for the system instructions."),
+            instruction_id: z
+                .string()
+                .optional()
+                .describe("Instruction identifier to update. Defaults to 'main'."),
+            reason: z.string().optional().describe("Brief rationale for the change."),
+            change_type: z
+                .enum(["refine", "append", "replace"])
+                .optional()
+                .describe("Intent for the change."),
+            dry_run: z.boolean().optional().describe("When true, validate but do not persist."),
+        });
+
+        type UpdateSystemInstructionsArgs = z.infer<typeof updateSystemInstructionsParams>;
+
         // 0. Tool to get instructions
-        this.server.tool(
+        this.server.tool<typeof getSystemInstructionsParams.shape>(
             "get_system_instructions",
-            {},
-            async () => {
+            getSystemInstructionsParams.shape,
+            async (args: GetSystemInstructionsArgs, _extra) => {
+                const instruction_id = args?.instruction_id;
                 console.log("Attempting to execute get_system_instructions...");
+                const instructionId = resolveInstructionId(instruction_id);
                 try {
-                    console.log("Fetching system instructions from Supabase...");
+                    console.log(`Fetching system instructions '${instructionId}' from Supabase...`);
                     const { data, error } = await supabase
                         .from('system_instructions')
-                        .select('content')
-                        .eq('id', 'main')
-                        .single();
+                        .select('id, content, updated_at')
+                        .eq('id', instructionId)
+                        .maybeSingle();
 
                     if (error) {
                         console.error("Error fetching instructions from Supabase:", error);
                         throw new Error(`Supabase error: ${error.message}`);
                     }
 
+                    if (!data) {
+                        console.warn(`Instruction '${instructionId}' not found.`);
+                        return createToolResponse("get_system_instructions", false, undefined, {
+                            message: "Instruction not found",
+                            code: "NOT_FOUND",
+                        });
+                    }
+
                     console.log("Successfully fetched instructions.");
-                    return { content: [{ type: "text", text: data.content }] };
+                    const payloadData: Record<string, unknown> = {
+                        instruction_id: data.id,
+                        content: data.content,
+                        content_length: data.content?.length ?? 0,
+                    };
+
+                    if (data.updated_at) {
+                        payloadData.updated_at = data.updated_at;
+                    }
+
+                    return createToolResponse("get_system_instructions", true, payloadData);
                 } catch (error: any) {
                     console.error("Caught error in get_system_instructions:", error);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                tool: "get_system_instructions",
-                                status: "failed",
-                                error: error.message,
-                                stack: error.stack
-                            })
-                        }]
-                    };
+                    return createToolResponse("get_system_instructions", false, undefined, {
+                        message: error?.message ?? "Unknown error",
+                    });
                 }
             }
         );
 
         // New Tool: Update Tool Instructions
-        this.server.tool(
+        this.server.tool<typeof updateSystemInstructionsParams.shape>(
             "update_system_instructions",
-            {
-                new_instructions_content: z.string().describe("The complete new content for the system instructions file."),
-            },
-            async ({ new_instructions_content }) => {
+            updateSystemInstructionsParams.shape,
+            async (args: UpdateSystemInstructionsArgs, _extra) => {
+                const { new_instructions_content, instruction_id, dry_run } = args;
                 console.log("Attempting to execute update_system_instructions...");
+                const instructionId = resolveInstructionId(instruction_id);
+
                 try {
+                    const trimmedContent = new_instructions_content.trim();
+                    if (trimmedContent.length === 0) {
+                        console.warn("Rejected update due to empty instruction content.");
+                        return createToolResponse("update_system_instructions", false, undefined, {
+                            message: "Instruction content cannot be empty.",
+                            code: "EMPTY_CONTENT",
+                        });
+                    }
+
+                    console.log(`Fetching existing instruction '${instructionId}' for comparison...`);
+                    const { data: existingInstruction, error: fetchError } = await supabase
+                        .from('system_instructions')
+                        .select('id, content')
+                        .eq('id', instructionId)
+                        .maybeSingle();
+
+                    if (fetchError) {
+                        console.error("Error fetching instructions from Supabase:", fetchError);
+                        throw new Error(`Supabase error: ${fetchError.message}`);
+                    }
+
+                    if (!existingInstruction) {
+                        console.warn(`Instruction '${instructionId}' not found for update.`);
+                        return createToolResponse("update_system_instructions", false, undefined, {
+                            message: "Instruction not found",
+                            code: "NOT_FOUND",
+                        });
+                    }
+
+                    const currentContent = existingInstruction.content ?? "";
+                    const currentLength = currentContent.length;
+                    const newLength = new_instructions_content.length;
+
+                    if (!dry_run && new_instructions_content === currentContent) {
+                        console.log("No changes detected; skipping update.");
+                        return createToolResponse("update_system_instructions", true, {
+                            instruction_id: instructionId,
+                            updated: false,
+                            content_length: newLength,
+                            summary: "Content is unchanged; no update performed.",
+                        });
+                    }
+
+                    if (dry_run) {
+                        console.log("Dry run enabled; not persisting changes.");
+                        return createToolResponse("update_system_instructions", true, {
+                            instruction_id: instructionId,
+                            updated: false,
+                            content_length: newLength,
+                            summary: `Dry run: instruction '${instructionId}' would be updated (${currentLength} -> ${newLength} chars).`,
+                        });
+                    }
+
                     console.log("Updating system instructions in Supabase...");
-                    const { error } = await supabase
+                    const { error: updateError } = await supabase
                         .from('system_instructions')
                         .update({ content: new_instructions_content })
-                        .eq('id', 'main');
+                        .eq('id', instructionId);
 
-                    if (error) {
-                        console.error("Error updating instructions in Supabase:", error);
-                        throw new Error(`Supabase error: ${error.message}`);
+                    if (updateError) {
+                        console.error("Error updating instructions in Supabase:", updateError);
+                        throw new Error(`Supabase error: ${updateError.message}`);
                     }
 
                     console.log("Successfully updated instructions.");
-                    return { content: [{ type: "text", text: "System instructions updated successfully." }] };
+                    return createToolResponse("update_system_instructions", true, {
+                        instruction_id: instructionId,
+                        updated: true,
+                        content_length: newLength,
+                        summary: `Instruction '${instructionId}' updated (${currentLength} -> ${newLength} chars).`,
+                    });
                 } catch (error: any) {
                     console.error("Caught error in update_system_instructions:", error);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                tool: "update_system_instructions",
-                                status: "failed",
-                                error: error.message,
-                                stack: error.stack
-                            })
-                        }]
-                    };
+                    return createToolResponse("update_system_instructions", false, undefined, {
+                        message: error?.message ?? "Unknown error",
+                    });
                 }
             }
         );
