@@ -209,39 +209,78 @@ export class MyMCP extends McpAgent {
 
     async init() {
         // 0. Tool to get instructions
+        const createResponse = (
+            tool: string,
+            payload: { success: boolean; data?: Record<string, unknown>; error?: { message: string; code?: string } }
+        ) => ({
+            content: [
+                {
+                    type: "text" as const,
+                    text: JSON.stringify({
+                        tool,
+                        ...payload,
+                    }),
+                },
+            ],
+        });
+
+        const fetchSystemInstruction = async (instructionId: string) => {
+            const { data, error } = await supabase
+                .from('system_instructions')
+                .select('id, content, updated_at')
+                .eq('id', instructionId)
+                .maybeSingle();
+
+            if (error) {
+                throw new Error(`Supabase error: ${error.message}`);
+            }
+
+            return data as { id: string; content: string; updated_at?: string } | null;
+        };
+
+        const DEFAULT_INSTRUCTION_ID = 'main';
+
         this.server.tool(
             "get_system_instructions",
-            {},
-            async () => {
+            {
+                instruction_id: z.string().optional().describe("The identifier of the instruction to fetch. Defaults to 'main'."),
+            },
+            async ({ instruction_id }) => {
                 console.log("Attempting to execute get_system_instructions...");
                 try {
-                    console.log("Fetching system instructions from Supabase...");
-                    const { data, error } = await supabase
-                        .from('system_instructions')
-                        .select('content')
-                        .eq('id', 'main')
-                        .single();
+                    const instructionId = instruction_id ?? DEFAULT_INSTRUCTION_ID;
+                    console.log(`Fetching system instructions for '${instructionId}' from Supabase...`);
+                    const record = await fetchSystemInstruction(instructionId);
 
-                    if (error) {
-                        console.error("Error fetching instructions from Supabase:", error);
-                        throw new Error(`Supabase error: ${error.message}`);
+                    if (!record) {
+                        console.warn(`Instruction '${instructionId}' not found.`);
+                        return createResponse("get_system_instructions", {
+                            success: false,
+                            error: {
+                                message: "Instruction not found",
+                                code: "NOT_FOUND",
+                            },
+                        });
                     }
 
                     console.log("Successfully fetched instructions.");
-                    return { content: [{ type: "text", text: data.content }] };
+                    return createResponse("get_system_instructions", {
+                        success: true,
+                        data: {
+                            instruction_id: record.id,
+                            content: record.content,
+                            content_length: record.content.length,
+                            ...(record.updated_at ? { updated_at: record.updated_at } : {}),
+                        },
+                    });
                 } catch (error: any) {
                     console.error("Caught error in get_system_instructions:", error);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                tool: "get_system_instructions",
-                                status: "failed",
-                                error: error.message,
-                                stack: error.stack
-                            })
-                        }]
-                    };
+                    return createResponse("get_system_instructions", {
+                        success: false,
+                        error: {
+                            message: error?.message ?? "Unknown error",
+                        },
+                    });
                 }
             }
         );
@@ -250,37 +289,111 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "update_system_instructions",
             {
-                new_instructions_content: z.string().describe("The complete new content for the system instructions file."),
+                new_instructions_content: z.string().describe("The complete new content for the system instructions."),
+                instruction_id: z.string().optional().describe("The identifier of the instruction to update. Defaults to 'main'."),
+                reason: z.string().optional().describe("Brief human-readable rationale for the update."),
+                change_type: z.enum(["refine", "append", "replace"]).optional().describe("Type of change being made."),
+                dry_run: z.boolean().optional().describe("If true, validate the update without persisting changes."),
             },
-            async ({ new_instructions_content }) => {
+            async ({ new_instructions_content, instruction_id, reason, change_type, dry_run }) => {
                 console.log("Attempting to execute update_system_instructions...");
                 try {
+                    const instructionId = instruction_id ?? DEFAULT_INSTRUCTION_ID;
+                    console.log(`Preparing to ${dry_run ? "dry run" : "apply"} update for instruction '${instructionId}'.`);
+
+                    const trimmedContent = new_instructions_content.trim();
+                    if (trimmedContent.length === 0) {
+                        console.warn("Rejected update due to empty content.");
+                        return createResponse("update_system_instructions", {
+                            success: false,
+                            error: {
+                                message: "Instruction content must not be empty.",
+                                code: "INVALID_CONTENT",
+                            },
+                        });
+                    }
+
+                    const existing = await fetchSystemInstruction(instructionId);
+                    if (!existing) {
+                        console.warn(`Instruction '${instructionId}' not found for update.`);
+                        return createResponse("update_system_instructions", {
+                            success: false,
+                            error: {
+                                message: "Instruction not found",
+                                code: "NOT_FOUND",
+                            },
+                        });
+                    }
+
+                    const contentLength = new_instructions_content.length;
+                    const changeSummaryParts = [
+                        dry_run ? "Dry run" : "Updated",
+                        `instruction '${instructionId}'`,
+                        `(${existing.content.length} -> ${contentLength} chars)`,
+                    ];
+
+                    if (change_type) {
+                        changeSummaryParts.push(`change_type=${change_type}`);
+                    }
+
+                    if (reason) {
+                        changeSummaryParts.push(`reason=${reason}`);
+                    }
+
+                    if (dry_run) {
+                        console.log("Dry run requested; not persisting changes.");
+                        return createResponse("update_system_instructions", {
+                            success: true,
+                            data: {
+                                instruction_id: instructionId,
+                                updated: false,
+                                content_length: contentLength,
+                                summary: changeSummaryParts.join("; "),
+                            },
+                        });
+                    }
+
                     console.log("Updating system instructions in Supabase...");
-                    const { error } = await supabase
+                    const { data, error } = await supabase
                         .from('system_instructions')
                         .update({ content: new_instructions_content })
-                        .eq('id', 'main');
+                        .eq('id', instructionId)
+                        .select('id');
 
                     if (error) {
                         console.error("Error updating instructions in Supabase:", error);
                         throw new Error(`Supabase error: ${error.message}`);
                     }
 
+                    if (!data || data.length === 0) {
+                        console.error(`No rows updated for instruction '${instructionId}'.`);
+                        return createResponse("update_system_instructions", {
+                            success: false,
+                            error: {
+                                message: "Instruction not found",
+                                code: "NOT_FOUND",
+                            },
+                        });
+                    }
+
                     console.log("Successfully updated instructions.");
-                    return { content: [{ type: "text", text: "System instructions updated successfully." }] };
+                    return createResponse("update_system_instructions", {
+                        success: true,
+                        data: {
+                            instruction_id: instructionId,
+                            updated: true,
+                            content_length: contentLength,
+                            summary: changeSummaryParts.join("; "),
+                        },
+                    });
                 } catch (error: any) {
                     console.error("Caught error in update_system_instructions:", error);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                tool: "update_system_instructions",
-                                status: "failed",
-                                error: error.message,
-                                stack: error.stack
-                            })
-                        }]
-                    };
+                    return createResponse("update_system_instructions", {
+                        success: false,
+                        error: {
+                            message: error?.message ?? "Unknown error",
+                        },
+                    });
                 }
             }
         );
