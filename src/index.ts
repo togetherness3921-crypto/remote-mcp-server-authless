@@ -770,6 +770,64 @@ export class MyMCP extends McpAgent {
                 }
             }
         );
+
+        this.server.tool(
+            'get_user_setting',
+            {
+                key: z.string().describe('The key of the setting to retrieve.'),
+            },
+            async ({ key }) => {
+                try {
+                    const { data, error } = await supabase
+                        .from('user_settings')
+                        .select('value')
+                        .eq('key', key)
+                        .single();
+
+                    if (error) {
+                        if (error.code === 'PGRST116') { // PostgREST code for "Not Found"
+                            return { content: [{ type: 'text', text: JSON.stringify({ success: true, value: null }) }] };
+                        }
+                        throw error;
+                    }
+
+                    return { content: [{ type: 'text', text: JSON.stringify({ success: true, value: data.value }) }] };
+                } catch (error: any) {
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({ tool: 'get_user_setting', status: 'failed', error: error.message }),
+                        }],
+                    };
+                }
+            }
+        );
+
+        this.server.tool(
+            'set_user_setting',
+            {
+                key: z.string().describe('The key of the setting to set.'),
+                value: z.string().describe('The value to set for the key.'),
+            },
+            async ({ key, value }) => {
+                try {
+                    const { error } = await supabase
+                        .from('user_settings')
+                        .upsert({ key, value });
+
+                    if (error) throw error;
+
+                    return { content: [{ type: 'text', text: JSON.stringify({ success: true }) }] };
+                } catch (error: any) {
+                    return {
+                        content: [{
+                            type: 'text',
+                            text: JSON.stringify({ tool: 'set_user_setting', status: 'failed', error: error.message }),
+                        }],
+                    };
+                }
+            }
+        );
     }
 }
 
