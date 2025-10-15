@@ -2,14 +2,62 @@ import { McpAgent } from "agents/mcp";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { Operation, applyPatch } from "fast-json-patch";
-import { createClient } from '@supabase/supabase-js';
+import { createClient } from "@supabase/supabase-js";
 
 // Initialize Supabase client
 const SUPABASE_URL = "https://cvzgxnspmmxxxwnxiydk.supabase.co";
-const SUPABASE_SERVICE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2emd4bnNwbW14eHh3bnhpeWRrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1Njg3NzM1OCwiZXhwIjoyMDcyNDUzMzU4fQ.ZDl4Y3OQOeEeZ_QajGB6iRr0Xk3_Z7TMlI92yFmerzI";
+const SUPABASE_SERVICE_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN2emd4bnNwbW14eHh3bnhpeWRrIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1Njg3NzM1OCwiZXhwIjoyMDcyNDUzMzU4fQ.ZDl4Y3OQOeEeZ_QajGB6iRr0Xk3_Z7TMlI92yFmerzI";
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 type JSONPatch = Operation[];
+
+interface ToolResponseEnvelope {
+    tool: string;
+    success: boolean;
+    data?: Record<string, unknown>;
+    error?: {
+        message: string;
+        code?: string;
+    };
+}
+
+type ToolResponse = {
+    content: Array<{
+        type: "text";
+        text: string;
+    }>;
+};
+
+function createToolResponse(envelope: ToolResponseEnvelope): ToolResponse {
+    return {
+        content: [
+            {
+                type: "text",
+                text: JSON.stringify(envelope),
+            },
+        ],
+    };
+}
+
+function createToolSuccess(tool: string, data: Record<string, unknown>): ToolResponse {
+    return createToolResponse({
+        tool,
+        success: true,
+        data,
+    });
+}
+
+function createToolError(tool: string, message: string, code?: string): ToolResponse {
+    return createToolResponse({
+        tool,
+        success: false,
+        error: {
+            message,
+            code,
+        },
+    });
+}
 
 function calculateTruePercentages(nodes: Record<string, Node>): Record<string, Node> {
     const nodesWithTruePercentage = { ...nodes };
@@ -211,37 +259,52 @@ export class MyMCP extends McpAgent {
         // 0. Tool to get instructions
         this.server.tool(
             "get_system_instructions",
-            {},
-            async () => {
+            {
+                instruction_id: z.string().describe("Optional instruction identifier to target").optional(),
+            },
+            async ({ instruction_id }) => {
+                const toolName = "get_system_instructions";
                 console.log("Attempting to execute get_system_instructions...");
+                const targetInstructionId = instruction_id ?? "main";
+
                 try {
-                    console.log("Fetching system instructions from Supabase...");
+                    console.log(`Fetching system instructions for id='${targetInstructionId}' from Supabase...`);
                     const { data, error } = await supabase
-                        .from('system_instructions')
-                        .select('content')
-                        .eq('id', 'main')
+                        .from("system_instructions")
+                        .select("content, updated_at")
+                        .eq("id", targetInstructionId)
                         .single();
 
                     if (error) {
                         console.error("Error fetching instructions from Supabase:", error);
+                        if (error.code === "PGRST116") {
+                            return createToolError(toolName, "Instruction not found", "NOT_FOUND");
+                        }
                         throw new Error(`Supabase error: ${error.message}`);
                     }
 
+                    if (!data) {
+                        console.warn(`Instruction '${targetInstructionId}' not found.`);
+                        return createToolError(toolName, "Instruction not found", "NOT_FOUND");
+                    }
+
                     console.log("Successfully fetched instructions.");
-                    return { content: [{ type: "text", text: data.content }] };
+                    const responseData: Record<string, unknown> = {
+                        instruction_id: targetInstructionId,
+                        content: data.content,
+                        content_length: (data.content ?? "").length,
+                    };
+
+                    if (data.updated_at) {
+                        responseData.updated_at = data.updated_at;
+                    }
+
+                    return createToolSuccess(toolName, responseData);
                 } catch (error: any) {
                     console.error("Caught error in get_system_instructions:", error);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                tool: "get_system_instructions",
-                                status: "failed",
-                                error: error.message,
-                                stack: error.stack
-                            })
-                        }]
-                    };
+                    const message = error?.message ?? "Unknown error";
+                    const code = error?.code ? String(error.code) : undefined;
+                    return createToolError(toolName, message, code);
                 }
             }
         );
@@ -250,37 +313,115 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "update_system_instructions",
             {
-                new_instructions_content: z.string().describe("The complete new content for the system instructions file."),
+                new_instructions_content: z
+                    .string()
+                    .describe("The complete new content for the system instructions file."),
+                instruction_id: z.string().describe("Optional instruction identifier to target").optional(),
+                reason: z.string().describe("Human readable rationale for the change").optional(),
+                change_type: z.enum(["refine", "append", "replace"]).describe("Intent of the change").optional(),
+                dry_run: z.boolean().describe("If true, validate without persisting").optional(),
             },
-            async ({ new_instructions_content }) => {
+            async ({
+                new_instructions_content,
+                instruction_id,
+                reason,
+                change_type,
+                dry_run,
+            }) => {
+                const toolName = "update_system_instructions";
                 console.log("Attempting to execute update_system_instructions...");
-                try {
-                    console.log("Updating system instructions in Supabase...");
-                    const { error } = await supabase
-                        .from('system_instructions')
-                        .update({ content: new_instructions_content })
-                        .eq('id', 'main');
+                const targetInstructionId = instruction_id ?? "main";
 
-                    if (error) {
-                        console.error("Error updating instructions in Supabase:", error);
-                        throw new Error(`Supabase error: ${error.message}`);
+                try {
+                    const trimmedContent = new_instructions_content.trim();
+                    if (trimmedContent.length === 0) {
+                        console.warn("Rejected update due to empty content.");
+                        return createToolError(toolName, "Instruction content cannot be empty", "INVALID_CONTENT");
+                    }
+
+                    console.log(`Fetching current instructions for id='${targetInstructionId}'...`);
+                    const { data: existingData, error: fetchError } = await supabase
+                        .from("system_instructions")
+                        .select("content, updated_at")
+                        .eq("id", targetInstructionId)
+                        .single();
+
+                    if (fetchError) {
+                        console.error("Error fetching current instructions:", fetchError);
+                        if (fetchError.code === "PGRST116") {
+                            return createToolError(toolName, "Instruction not found", "NOT_FOUND");
+                        }
+                        throw new Error(`Supabase error: ${fetchError.message}`);
+                    }
+
+                    if (!existingData) {
+                        console.warn(`Instruction '${targetInstructionId}' not found during update.`);
+                        return createToolError(toolName, "Instruction not found", "NOT_FOUND");
+                    }
+
+                    const currentContent: string = existingData.content ?? "";
+                    const currentLength = currentContent.length;
+                    const newLength = new_instructions_content.length;
+
+                    if (dry_run) {
+                        console.log("Dry run enabled; not persisting changes.");
+                        const summaryParts = [
+                            `Dry run: instruction '${targetInstructionId}' would be ${(change_type ?? "updated")}.`,
+                            `Length ${currentLength} -> ${newLength}.`,
+                        ];
+                        if (reason) {
+                            summaryParts.push(`Reason: ${reason}.`);
+                        }
+
+                        return createToolSuccess(toolName, {
+                            instruction_id: targetInstructionId,
+                            updated: false,
+                            content_length: newLength,
+                            summary: summaryParts.join(" ").trim(),
+                        });
+                    }
+
+                    if (currentContent === new_instructions_content) {
+                        console.log("No changes detected between current and new content.");
+                        return createToolSuccess(toolName, {
+                            instruction_id: targetInstructionId,
+                            updated: false,
+                            content_length: newLength,
+                            summary: "No changes applied; content is identical to the stored version.",
+                        });
+                    }
+
+                    console.log("Updating system instructions in Supabase...");
+                    const { error: updateError } = await supabase
+                        .from("system_instructions")
+                        .update({ content: new_instructions_content })
+                        .eq("id", targetInstructionId);
+
+                    if (updateError) {
+                        console.error("Error updating instructions in Supabase:", updateError);
+                        throw new Error(`Supabase error: ${updateError.message}`);
+                    }
+
+                    const summaryParts = [
+                        `Instruction '${targetInstructionId}' ${(change_type ?? "updated")}.`,
+                        `Length ${currentLength} -> ${newLength}.`,
+                    ];
+                    if (reason) {
+                        summaryParts.push(`Reason: ${reason}.`);
                     }
 
                     console.log("Successfully updated instructions.");
-                    return { content: [{ type: "text", text: "System instructions updated successfully." }] };
+                    return createToolSuccess(toolName, {
+                        instruction_id: targetInstructionId,
+                        updated: true,
+                        content_length: newLength,
+                        summary: summaryParts.join(" ").trim(),
+                    });
                 } catch (error: any) {
                     console.error("Caught error in update_system_instructions:", error);
-                    return {
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                tool: "update_system_instructions",
-                                status: "failed",
-                                error: error.message,
-                                stack: error.stack
-                            })
-                        }]
-                    };
+                    const message = error?.message ?? "Unknown error";
+                    const code = error?.code ? String(error.code) : undefined;
+                    return createToolError(toolName, message, code);
                 }
             }
         );
