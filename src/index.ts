@@ -589,7 +589,7 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "patch_graph_document",
             {
-                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. When adding or updating nodes, the `type` field MUST be one of: `objectiveNode`, `goalNode`, `milestoneNode`, `startNode`, or `validationNode` (case-sensitive)."),
+                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. When adding or updating nodes, the `type` field MUST be one of: `objectiveNode`, `goalNode`, `milestoneNode`, `startNode`, or `validationNode` (case-sensitive). The `status` field MUST be omitted or set to exactly one of: `not-started`, `in-progress`, or `completed`."),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
