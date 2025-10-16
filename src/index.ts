@@ -12,6 +12,45 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 type JSONPatch = Operation[];
 
+const ALLOWED_STATUSES: Array<Node['status']> = ['not-started', 'in-progress', 'completed'];
+const ALLOWED_STATUS_SET = new Set(ALLOWED_STATUSES);
+const DEFAULT_STATUS: Node['status'] = 'not-started';
+const ALLOWED_NODE_TYPE = 'objectiveNode';
+
+const normalizeNode = (nodeId: string, node: any) => {
+    let rawType = node?.type;
+    if (typeof rawType === 'string') {
+        const lowered = rawType.trim().toLowerCase();
+        if (lowered === 'objectivenode') {
+            rawType = ALLOWED_NODE_TYPE;
+        }
+    }
+    if (!rawType) {
+        rawType = ALLOWED_NODE_TYPE;
+    }
+    if (rawType !== ALLOWED_NODE_TYPE) {
+        throw new Error(`Invalid node type "${rawType}" for node "${nodeId}". See Graph Contract v1.0.`);
+    }
+    node.type = ALLOWED_NODE_TYPE;
+
+    if (node.status === undefined || node.status === null || node.status === '') {
+        return;
+    }
+    if (typeof node.status !== 'string') {
+        throw new Error(`Invalid status for node "${nodeId}". Status must be a string matching the Graph Contract v1.0 enum.`);
+    }
+    const trimmedStatus = node.status.trim();
+    if (ALLOWED_STATUS_SET.has(trimmedStatus as Node['status'])) {
+        node.status = trimmedStatus as Node['status'];
+        return;
+    }
+    if (trimmedStatus.toLowerCase() === 'pending') {
+        node.status = DEFAULT_STATUS;
+        return;
+    }
+    throw new Error(`Invalid status "${trimmedStatus}" for node "${nodeId}". Allowed statuses: ${ALLOWED_STATUSES.join(', ')}.`);
+};
+
 function calculateTruePercentages(nodes: Record<string, Node>): Record<string, Node> {
     const nodesWithTruePercentage = { ...nodes };
     const memo: Record<string, number> = {};
@@ -25,6 +64,8 @@ function calculateTruePercentages(nodes: Record<string, Node>): Record<string, N
         if (!node) {
             return 0;
         }
+
+        normalizeNode(nodeId, node);
 
         if (!node.parents || node.parents.length === 0) {
             memo[nodeId] = node.percentage_of_parent || 0;
@@ -589,7 +630,7 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "patch_graph_document",
             {
-                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. When adding or updating nodes, the `type` field MUST be one of: `objectiveNode`, `goalNode`, `milestoneNode`, `startNode`, or `validationNode` (case-sensitive). The `status` field MUST be omitted or set to exactly one of: `not-started`, `in-progress`, or `completed`."),
+                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. Graph structure rules are defined in the system instructions (Graph Contract v1.0); node patches must follow that contract."),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
@@ -616,6 +657,10 @@ export class MyMCP extends McpAgent {
                     if (!patchedDoc) {
                         throw new Error("Patch application failed.");
                     }
+
+                    Object.entries(patchedDoc.nodes || {}).forEach(([nodeId, node]: [string, any]) => {
+                        normalizeNode(nodeId, node);
+                    });
                     patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
 
 
