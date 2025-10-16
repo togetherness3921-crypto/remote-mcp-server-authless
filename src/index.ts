@@ -238,34 +238,25 @@ export class MyMCP extends McpAgent {
         const resolveInstructionId = (instructionId?: string) => instructionId?.trim() || "main";
 
         const getSystemInstructionsParams = z.object({
-            instruction_id: z
-                .string()
-                .optional()
-                .describe("Instruction identifier to read. Defaults to 'main'."),
         });
 
-        type GetSystemInstructionsArgs = z.infer<typeof getSystemInstructionsParams>;
+        type GetSystemInstructionsArgs = z.infer<typeof getSystemInstructionsParams> & { instruction_id?: string };
 
         const updateSystemInstructionsParams = z.object({
             new_instructions_content: z
                 .string()
                 .describe("The complete new content for the system instructions."),
-            instruction_id: z
-                .string()
-                .optional()
-                .describe("Instruction identifier to update. Defaults to 'main'."),
             reason: z.string().optional().describe("Brief rationale for the change."),
             change_type: z
                 .enum(["refine", "append", "replace"])
                 .optional()
                 .describe("Intent for the change."),
-            dry_run: z.boolean().optional().describe("When true, validate but do not persist."),
         });
 
-        type UpdateSystemInstructionsArgs = z.infer<typeof updateSystemInstructionsParams>;
+        type UpdateSystemInstructionsArgs = z.infer<typeof updateSystemInstructionsParams> & { instruction_id?: string, dry_run?: boolean };
 
         // 0. Tool to get instructions
-        this.server.tool<typeof getSystemInstructionsParams.shape>(
+        this.server.tool<GetSystemInstructionsArgs>(
             "get_system_instructions",
             getSystemInstructionsParams.shape,
             async (args: GetSystemInstructionsArgs, _extra) => {
@@ -315,7 +306,7 @@ export class MyMCP extends McpAgent {
         );
 
         // New Tool: Update Tool Instructions
-        this.server.tool<typeof updateSystemInstructionsParams.shape>(
+        this.server.tool<UpdateSystemInstructionsArgs>(
             "update_system_instructions",
             updateSystemInstructionsParams.shape,
             async (args: UpdateSystemInstructionsArgs, _extra) => {
