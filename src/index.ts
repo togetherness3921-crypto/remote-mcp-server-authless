@@ -236,6 +236,7 @@ export class MyMCP extends McpAgent {
         };
 
         const getSystemInstructionsParams = z.object({
+            instruction_id: z.string().optional().describe("System use only. Omit this parameter."),
         });
 
         type GetSystemInstructionsArgs = z.infer<typeof getSystemInstructionsParams> & { instruction_id?: string };
@@ -244,11 +245,13 @@ export class MyMCP extends McpAgent {
             new_instructions_content: z
                 .string()
                 .describe("The complete new content for the system instructions."),
+            instruction_id: z.string().optional().describe("System use only. Omit this parameter."),
             reason: z.string().optional().describe("Brief rationale for the change."),
             change_type: z
                 .enum(["refine", "append", "replace"])
                 .optional()
                 .describe("Intent for the change."),
+            dry_run: z.boolean().optional().describe("When true, validate but do not persist."),
         });
 
         type UpdateSystemInstructionsArgs = z.infer<typeof updateSystemInstructionsParams> & { instruction_id?: string, dry_run?: boolean };
@@ -310,8 +313,8 @@ export class MyMCP extends McpAgent {
             "update_system_instructions",
             updateSystemInstructionsParams.shape,
             async (args: UpdateSystemInstructionsArgs, _extra) => {
-                const { new_instructions_content, dry_run } = args;
-                const instructionId = args?.instruction_id;
+                const { new_instructions_content, instruction_id, dry_run } = args;
+                const instructionId = instruction_id;
                 console.log("Attempting to execute update_system_instructions...");
 
                 try {
