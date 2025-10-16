@@ -235,8 +235,6 @@ export class MyMCP extends McpAgent {
             };
         };
 
-        const resolveInstructionId = (instructionId?: string) => instructionId?.trim() || "main";
-
         const getSystemInstructionsParams = z.object({
         });
 
@@ -260,10 +258,12 @@ export class MyMCP extends McpAgent {
             "get_system_instructions",
             getSystemInstructionsParams.shape,
             async (args: GetSystemInstructionsArgs, _extra) => {
-                const instruction_id = args?.instruction_id;
+                const instructionId = args?.instruction_id;
                 console.log("Attempting to execute get_system_instructions...");
-                const instructionId = resolveInstructionId(instruction_id);
                 try {
+                    if (!instructionId) {
+                        throw new Error("System error: instruction_id was not provided by the client.");
+                    }
                     console.log(`Fetching system instructions '${instructionId}' from Supabase...`);
                     const { data, error } = await supabase
                         .from('system_instructions')
@@ -310,11 +310,15 @@ export class MyMCP extends McpAgent {
             "update_system_instructions",
             updateSystemInstructionsParams.shape,
             async (args: UpdateSystemInstructionsArgs, _extra) => {
-                const { new_instructions_content, instruction_id, dry_run } = args;
+                const { new_instructions_content, dry_run } = args;
+                const instructionId = args?.instruction_id;
                 console.log("Attempting to execute update_system_instructions...");
-                const instructionId = resolveInstructionId(instruction_id);
 
                 try {
+                    if (!instructionId) {
+                        throw new Error("System error: instruction_id was not provided by the client.");
+                    }
+
                     const trimmedContent = new_instructions_content.trim();
                     if (trimmedContent.length === 0) {
                         console.warn("Rejected update due to empty instruction content.");
