@@ -142,6 +142,53 @@ interface GraphDocument {
     historical_progress: Record<string, any>;
 }
 
+type NodeWithChildren = Node & { children: Record<string, NodeWithChildren> };
+
+const buildHierarchicalNodes = (nodes: Record<string, Node>): Record<string, NodeWithChildren> => {
+    const nodeIds = Object.keys(nodes);
+    if (nodeIds.length === 0) {
+        return {};
+    }
+
+    const subset = new Set(nodeIds);
+    const clones: Record<string, NodeWithChildren> = {};
+
+    for (const nodeId of nodeIds) {
+        const node = nodes[nodeId];
+        if (!node) {
+            continue;
+        }
+        clones[nodeId] = {
+            ...node,
+            children: {}
+        };
+    }
+
+    const rootIds = new Set(nodeIds);
+
+    for (const nodeId of nodeIds) {
+        const node = nodes[nodeId];
+        if (!node) {
+            continue;
+        }
+
+        const parents = Array.isArray(node.parents) ? node.parents : [];
+        for (const parentId of parents) {
+            if (subset.has(parentId) && clones[parentId]) {
+                clones[parentId].children[nodeId] = clones[nodeId];
+                rootIds.delete(nodeId);
+            }
+        }
+    }
+
+    const hierarchical: Record<string, NodeWithChildren> = {};
+    rootIds.forEach(rootId => {
+        hierarchical[rootId] = clones[rootId];
+    });
+
+    return hierarchical;
+};
+
 
 export class MyMCP extends McpAgent {
     server = new McpServer({
@@ -506,6 +553,8 @@ export class MyMCP extends McpAgent {
                     const resultGraphWithPercentages = calculateTruePercentages(resultGraph);
                     console.log("Successfully calculated true percentages.");
 
+                    const hierarchicalContext = buildHierarchicalNodes(resultGraphWithPercentages);
+
                     return {
                         content: [{
                             type: "text",
@@ -513,7 +562,7 @@ export class MyMCP extends McpAgent {
                                 success: true,
                                 current_date: new Date().toISOString(),
                                 score_context: calculateScores(doc.nodes),
-                                context: resultGraphWithPercentages
+                                context: hierarchicalContext
                             }, null, 2)
                         }]
                     };
@@ -548,12 +597,13 @@ export class MyMCP extends McpAgent {
                     const doc = await this.getGraphDocument();
                     console.log("Successfully fetched graph document.");
 
-                    let allNodes = doc.nodes;
+                    const allNodes = doc.nodes;
                     const currentDate = new Date().toISOString();
                     const scoreContext = calculateScores(allNodes);
 
                     if (start_node_id === "main") {
-                        allNodes = calculateTruePercentages(allNodes);
+                        const nodesWithPercentages = calculateTruePercentages(allNodes);
+                        const hierarchicalStructure = buildHierarchicalNodes(nodesWithPercentages);
                         return {
                             content: [{
                                 type: "text",
@@ -561,7 +611,7 @@ export class MyMCP extends McpAgent {
                                     success: true,
                                     current_date: currentDate,
                                     score_context: scoreContext,
-                                    structure: allNodes
+                                    structure: hierarchicalStructure
                                 })
                             }]
                         };
@@ -598,6 +648,8 @@ export class MyMCP extends McpAgent {
                     const resultNodesWithPercentages = calculateTruePercentages(resultNodes);
                     console.log("Successfully calculated true percentages for graph structure.");
 
+                    const hierarchicalStructure = buildHierarchicalNodes(resultNodesWithPercentages);
+
                     return {
                         content: [{
                             type: "text",
@@ -605,7 +657,7 @@ export class MyMCP extends McpAgent {
                                 success: true,
                                 current_date: currentDate,
                                 score_context: scoreContext,
-                                structure: resultNodesWithPercentages
+                                structure: hierarchicalStructure
                             })
                         }]
                     };
@@ -712,13 +764,17 @@ export class MyMCP extends McpAgent {
 
                     if (!hasChanges) {
                         console.log("No changes detected after applying patches. Skipping update.");
+                        const responseDocument = {
+                            ...patchedDoc,
+                            nodes: buildHierarchicalNodes(patchedDoc.nodes)
+                        };
                         return {
                             content: [{
                                 type: "text",
                                 text: JSON.stringify({
                                     success: true,
                                     score_context: calculateScores(patchedDoc.nodes),
-                                    result: patchedDoc
+                                    result: responseDocument
                                 })
                             }]
                         };
@@ -730,13 +786,18 @@ export class MyMCP extends McpAgent {
                     const graphDocumentVersionId = await this.createGraphDocumentVersion(patchedDoc);
                     console.log(`Created graph document version: ${graphDocumentVersionId}`);
 
+                    const responseDocument = {
+                        ...patchedDoc,
+                        nodes: buildHierarchicalNodes(patchedDoc.nodes)
+                    };
+
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
                                 success: true,
                                 score_context: calculateScores(patchedDoc.nodes),
-                                result: patchedDoc,
+                                result: responseDocument,
                                 graph_document_version_id: graphDocumentVersionId
                             })
                         }]
@@ -782,12 +843,17 @@ export class MyMCP extends McpAgent {
                         };
                     }
 
+                    const responseDocument = {
+                        ...versionDoc,
+                        nodes: buildHierarchicalNodes(versionDoc.nodes)
+                    };
+
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
                                 success: true,
-                                result: versionDoc
+                                result: responseDocument
                             })
                         }]
                     };
@@ -836,12 +902,16 @@ export class MyMCP extends McpAgent {
 
                     if (this.documentsAreEqual(currentDoc, versionDoc)) {
                         console.log("Live document already matches requested version. No update required.");
+                        const responseDocument = {
+                            ...currentDoc,
+                            nodes: buildHierarchicalNodes(currentDoc.nodes)
+                        };
                         return {
                             content: [{
                                 type: "text",
                                 text: JSON.stringify({
                                     success: true,
-                                    result: currentDoc
+                                    result: responseDocument
                                 })
                             }]
                         };
@@ -853,12 +923,17 @@ export class MyMCP extends McpAgent {
                     const graphDocumentVersionId = await this.createGraphDocumentVersion(versionDoc);
                     console.log(`Created graph document version after set: ${graphDocumentVersionId}`);
 
+                    const responseDocument = {
+                        ...versionDoc,
+                        nodes: buildHierarchicalNodes(versionDoc.nodes)
+                    };
+
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
                                 success: true,
-                                result: versionDoc,
+                                result: responseDocument,
                                 graph_document_version_id: graphDocumentVersionId
                             })
                         }]
