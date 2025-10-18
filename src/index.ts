@@ -17,49 +17,35 @@ const ALLOWED_STATUS_SET = new Set(ALLOWED_STATUSES);
 const DEFAULT_STATUS: Node['status'] = 'not-started';
 const ALLOWED_NODE_TYPE = 'objectiveNode';
 
-const buildHierarchicalNodes = (nodes: Record<string, Node>): Record<string, Node> => {
-    const nodesWithChildren: Record<string, any> = JSON.parse(JSON.stringify(nodes));
-    const parentToChildren: Record<string, string[]> = {};
+const GRAPH_CONTRACT_SECTION_HEADING = "### Graph Contract v1.0 – Containment vs. Causality";
+const GRAPH_CONTRACT_INSTRUCTIONS = `${GRAPH_CONTRACT_SECTION_HEADING}
+- \`graph\` is the single source of truth for containment. Every node MUST include this property.
+- Use \`graph: "main"\` to keep a node in the top-level graph.
+- Use \`graph: "<container_node_id>"\` to place a node inside that container's explicit subgraph. The value must reference an existing node ID.
+- Containment (\`graph\`) is independent from causality (\`parents\`). Parents describe prerequisite objectives only; they do **not** affect which container owns the node.
+- You may have a node live in one container while listing different parents, or keep a node in the main graph while still having parents.
+- Never omit \`graph\`, never point it at the node itself, and never reference a deleted/non-existent node ID.
+- Example: The node \`workout_plan\` can set \`graph: "fitness_hub"\` to live inside the \`fitness_hub\` container while keeping \`parents: ["health_goal"]\` to express causality separately.`;
 
-    Object.keys(nodesWithChildren).forEach(id => {
-        nodesWithChildren[id].children = {};
-        const parents = nodesWithChildren[id].parents || [];
-        parents.forEach((parentId: string) => {
-            if (!parentToChildren[parentId]) {
-                parentToChildren[parentId] = [];
-            }
-            parentToChildren[parentId].push(id);
-        });
-    });
-
-    const rootNodes: Record<string, Node> = {};
-    Object.keys(nodesWithChildren).forEach(id => {
-        const node = nodesWithChildren[id];
-        const parents = node.parents || [];
-        const hasParentInSet = parents.some((pId: string) => nodesWithChildren[pId]);
-
-        if (!hasParentInSet) {
-            rootNodes[id] = node;
-        }
-    });
-
-    const buildTree = (nodeIds: string[]) => {
-        const tree: Record<string, Node> = {};
-        nodeIds.forEach(id => {
-            const node = nodesWithChildren[id];
-            if (parentToChildren[id]) {
-                const children = buildTree(parentToChildren[id]);
-                node.children = children;
-            }
-            tree[id] = node;
-        });
-        return tree;
-    };
-
-    return buildTree(Object.keys(rootNodes));
+const ensureGraphContractInstructionSection = (content: string | null | undefined): string => {
+    const base = content ?? '';
+    if (base.includes(GRAPH_CONTRACT_SECTION_HEADING)) {
+        return base.trimEnd();
+    }
+    const trimmedBase = base.trimEnd();
+    const prefix = trimmedBase.length > 0 ? `${trimmedBase}\n\n` : '';
+    return `${prefix}${GRAPH_CONTRACT_INSTRUCTIONS}`.trimEnd();
 };
 
-const normalizeNode = (nodeId: string, node: any) => {
+type NormalizeNodeOptions = {
+    validNodeIds?: Set<string>;
+};
+
+const normalizeNode = (nodeId: string, node: any, options: NormalizeNodeOptions = {}) => {
+    if (!node || typeof node !== 'object') {
+        throw new Error(`Invalid node payload for "${nodeId}". Node definitions must be objects.`);
+    }
+
     let rawType = node?.type;
     if (typeof rawType === 'string') {
         const lowered = rawType.trim().toLowerCase();
@@ -75,25 +61,69 @@ const normalizeNode = (nodeId: string, node: any) => {
     }
     node.type = ALLOWED_NODE_TYPE;
 
-    if (node.status === undefined || node.status === null || node.status === '') {
-        return;
+    if (node.status !== undefined && node.status !== null && node.status !== '') {
+        if (typeof node.status !== 'string') {
+            throw new Error(`Invalid status for node "${nodeId}". Status must be a string matching the Graph Contract v1.0 enum.`);
+        }
+        const trimmedStatus = node.status.trim();
+        if (ALLOWED_STATUS_SET.has(trimmedStatus as Node['status'])) {
+            node.status = trimmedStatus as Node['status'];
+        } else if (trimmedStatus.toLowerCase() === 'pending') {
+            node.status = DEFAULT_STATUS;
+        } else {
+            throw new Error(`Invalid status "${trimmedStatus}" for node "${nodeId}". Allowed statuses: ${ALLOWED_STATUSES.join(', ')}.`);
+        }
     }
-    if (typeof node.status !== 'string') {
-        throw new Error(`Invalid status for node "${nodeId}". Status must be a string matching the Graph Contract v1.0 enum.`);
+
+    const parentsValue = node.parents;
+    if (parentsValue === undefined || parentsValue === null) {
+        node.parents = [];
+    } else if (!Array.isArray(parentsValue)) {
+        throw new Error(`Invalid parents for node "${nodeId}". Parents must be an array of node IDs.`);
+    } else {
+        const normalizedParents: string[] = [];
+        for (const parentId of parentsValue) {
+            if (typeof parentId !== 'string') {
+                throw new Error(`Invalid parent reference in node "${nodeId}". Parent IDs must be strings.`);
+            }
+            const trimmedParent = parentId.trim();
+            if (trimmedParent) {
+                normalizedParents.push(trimmedParent);
+            }
+        }
+        node.parents = normalizedParents;
     }
-    const trimmedStatus = node.status.trim();
-    if (ALLOWED_STATUS_SET.has(trimmedStatus as Node['status'])) {
-        node.status = trimmedStatus as Node['status'];
-        return;
+
+    const graphValue = node.graph;
+    if (graphValue === undefined || graphValue === null) {
+        throw new Error(`Missing graph membership for node "${nodeId}". Each node must set graph to "main" or a container node ID.`);
     }
-    if (trimmedStatus.toLowerCase() === 'pending') {
-        node.status = DEFAULT_STATUS;
-        return;
+    if (typeof graphValue !== 'string') {
+        throw new Error(`Invalid graph value for node "${nodeId}". Graph must be a string ("main" or an existing node ID).`);
     }
-    throw new Error(`Invalid status "${trimmedStatus}" for node "${nodeId}". Allowed statuses: ${ALLOWED_STATUSES.join(', ')}.`);
+
+    const trimmedGraph = graphValue.trim();
+    if (!trimmedGraph) {
+        throw new Error(`Invalid graph value for node "${nodeId}". Graph cannot be empty.`);
+    }
+    if (trimmedGraph === nodeId) {
+        throw new Error(`Invalid graph value for node "${nodeId}". A node cannot declare itself as its own graph container.`);
+    }
+
+    if (trimmedGraph === 'main') {
+        node.graph = 'main';
+    } else {
+        if (options.validNodeIds && !options.validNodeIds.has(trimmedGraph)) {
+            throw new Error(`Invalid graph reference "${trimmedGraph}" for node "${nodeId}". Graph must reference an existing node in the same document or "main".`);
+        }
+        node.graph = trimmedGraph;
+    }
 };
 
-function calculateTruePercentages(nodes: Record<string, Node>): Record<string, Node> {
+function calculateTruePercentages(
+    nodes: Record<string, Node>,
+    options: NormalizeNodeOptions = {}
+): Record<string, Node> {
     const nodesWithTruePercentage = { ...nodes };
     const memo: Record<string, number> = {};
 
@@ -107,7 +137,7 @@ function calculateTruePercentages(nodes: Record<string, Node>): Record<string, N
             return 0;
         }
 
-        normalizeNode(nodeId, node);
+        normalizeNode(nodeId, node, options);
 
         if (!node.parents || node.parents.length === 0) {
             memo[nodeId] = node.percentage_of_parent || 0;
@@ -160,13 +190,33 @@ function calculateScores(nodes: Record<string, Node>): object {
     };
 }
 
+const enforceGraphContractOnDocument = (document: GraphDocument) => {
+    if (!document || typeof document !== 'object') {
+        throw new Error('Graph document is malformed.');
+    }
+
+    if (!document.nodes || typeof document.nodes !== 'object') {
+        document.nodes = {} as Record<string, Node>;
+        return;
+    }
+
+    const validNodeIds = new Set(Object.keys(document.nodes));
+    for (const [nodeId, node] of Object.entries(document.nodes)) {
+        if (!node || typeof node !== 'object') {
+            throw new Error(`Invalid node entry for "${nodeId}". Nodes must be objects that comply with the Graph Contract.`);
+        }
+        normalizeNode(nodeId, node, { validNodeIds });
+    }
+};
+
 
 // Define the structure of a node in the graph
 interface Node {
     type: string;
     label: string;
-    status: "not-started" | "in-progress" | "completed" | "blocked";
+    status: "not-started" | "in-progress" | "completed";
     parents: string[];
+    graph: string;
     percentage_of_parent: number;
     createdAt: string;
     scheduled_start?: string;
@@ -183,6 +233,53 @@ interface GraphDocument {
     };
     historical_progress: Record<string, any>;
 }
+
+type NodeWithChildren = Node & { children: Record<string, NodeWithChildren> };
+
+const buildHierarchicalNodes = (nodes: Record<string, Node>): Record<string, NodeWithChildren> => {
+    const nodeIds = Object.keys(nodes);
+    if (nodeIds.length === 0) {
+        return {};
+    }
+
+    const subset = new Set(nodeIds);
+    const clones: Record<string, NodeWithChildren> = {};
+
+    for (const nodeId of nodeIds) {
+        const node = nodes[nodeId];
+        if (!node) {
+            continue;
+        }
+        clones[nodeId] = {
+            ...node,
+            children: {}
+        };
+    }
+
+    const rootIds = new Set(nodeIds);
+
+    for (const nodeId of nodeIds) {
+        const node = nodes[nodeId];
+        if (!node) {
+            continue;
+        }
+
+        const parents = Array.isArray(node.parents) ? node.parents : [];
+        for (const parentId of parents) {
+            if (subset.has(parentId) && clones[parentId]) {
+                clones[parentId].children[nodeId] = clones[nodeId];
+                rootIds.delete(nodeId);
+            }
+        }
+    }
+
+    const hierarchical: Record<string, NodeWithChildren> = {};
+    rootIds.forEach(rootId => {
+        hierarchical[rootId] = clones[rootId];
+    });
+
+    return hierarchical;
+};
 
 
 export class MyMCP extends McpAgent {
@@ -213,7 +310,9 @@ export class MyMCP extends McpAgent {
             throw new Error("Graph document not found.");
         }
 
-        return data[0].data;
+        const document = data[0].data;
+        enforceGraphContractOnDocument(document);
+        return document;
     }
 
     private async updateGraphDocument(document: GraphDocument): Promise<void> {
@@ -265,7 +364,9 @@ export class MyMCP extends McpAgent {
             return null;
         }
 
-        return data.data as GraphDocument;
+        const document = data.data as GraphDocument;
+        enforceGraphContractOnDocument(document);
+        return document;
     }
 
     private async getEarliestGraphDocumentVersionId(): Promise<string | null> {
@@ -371,10 +472,11 @@ export class MyMCP extends McpAgent {
                     }
 
                     console.log("Successfully fetched instructions.");
+                    const normalizedContent = ensureGraphContractInstructionSection(data.content ?? "");
                     const payloadData: Record<string, unknown> = {
                         instruction_id: data.id,
-                        content: data.content,
-                        content_length: data.content?.length ?? 0,
+                        content: normalizedContent,
+                        content_length: normalizedContent.length,
                     };
 
                     if (data.updated_at) {
@@ -435,15 +537,18 @@ export class MyMCP extends McpAgent {
                     }
 
                     const currentContent = existingInstruction.content ?? "";
-                    const currentLength = currentContent.length;
-                    const newLength = new_instructions_content.length;
+                    const normalizedCurrentContent = ensureGraphContractInstructionSection(currentContent);
+                    const normalizedNewContent = ensureGraphContractInstructionSection(new_instructions_content);
+                    const currentLength = normalizedCurrentContent.length;
+                    const newLength = normalizedNewContent.length;
+                    const storedContentMatchesNormalized = currentContent.trimEnd() === normalizedCurrentContent.trimEnd();
 
-                    if (!dry_run && new_instructions_content === currentContent) {
+                    if (!dry_run && normalizedNewContent === normalizedCurrentContent && storedContentMatchesNormalized) {
                         console.log("No changes detected; skipping update.");
                         return createToolResponse("update_system_instructions", true, {
                             instruction_id: instructionId,
                             updated: false,
-                            content_length: newLength,
+                            content_length: currentLength,
                             summary: "Content is unchanged; no update performed.",
                         });
                     }
@@ -454,14 +559,14 @@ export class MyMCP extends McpAgent {
                             instruction_id: instructionId,
                             updated: false,
                             content_length: newLength,
-                            summary: `Dry run: instruction '${instructionId}' would be updated (${currentLength} -> ${newLength} chars).`,
+                            summary: `Dry run: instruction '${instructionId}' would be updated (${currentLength} -> ${newLength} chars, Graph Contract section enforced).`,
                         });
                     }
 
                     console.log("Updating system instructions in Supabase...");
                     const { error: updateError } = await supabase
                         .from('system_instructions')
-                        .update({ content: new_instructions_content })
+                        .update({ content: normalizedNewContent })
                         .eq('id', instructionId);
 
                     if (updateError) {
@@ -474,7 +579,7 @@ export class MyMCP extends McpAgent {
                         instruction_id: instructionId,
                         updated: true,
                         content_length: newLength,
-                        summary: `Instruction '${instructionId}' updated (${currentLength} -> ${newLength} chars).`,
+                        summary: `Instruction '${instructionId}' updated (${currentLength} -> ${newLength} chars, Graph Contract section enforced).`,
                     });
                 } catch (error: any) {
                     console.error("Caught error in update_system_instructions:", error);
@@ -548,7 +653,7 @@ export class MyMCP extends McpAgent {
                     const resultGraphWithPercentages = calculateTruePercentages(resultGraph);
                     console.log("Successfully calculated true percentages.");
 
-                    const hierarchicalStructure = buildHierarchicalNodes(resultGraphWithPercentages);
+                    const hierarchicalContext = buildHierarchicalNodes(resultGraphWithPercentages);
 
                     return {
                         content: [{
@@ -557,7 +662,7 @@ export class MyMCP extends McpAgent {
                                 success: true,
                                 current_date: new Date().toISOString(),
                                 score_context: calculateScores(doc.nodes),
-                                context: hierarchicalStructure
+                                context: hierarchicalContext
                             }, null, 2)
                         }]
                     };
@@ -592,12 +697,13 @@ export class MyMCP extends McpAgent {
                     const doc = await this.getGraphDocument();
                     console.log("Successfully fetched graph document.");
 
-                    let allNodes = doc.nodes;
+                    const allNodes = doc.nodes;
                     const currentDate = new Date().toISOString();
                     const scoreContext = calculateScores(allNodes);
 
                     if (start_node_id === "main") {
-                        allNodes = calculateTruePercentages(allNodes);
+                        const nodesWithPercentages = calculateTruePercentages(allNodes);
+                        const hierarchicalStructure = buildHierarchicalNodes(nodesWithPercentages);
                         return {
                             content: [{
                                 type: "text",
@@ -605,7 +711,7 @@ export class MyMCP extends McpAgent {
                                     success: true,
                                     current_date: currentDate,
                                     score_context: scoreContext,
-                                    structure: allNodes
+                                    structure: hierarchicalStructure
                                 })
                             }]
                         };
@@ -676,7 +782,7 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "patch_graph_document",
             {
-                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. Graph structure rules are defined in the system instructions (Graph Contract v1.0); node patches must follow that contract."),
+                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. Every node must include `graph` (\"main\" or an existing container node ID) and otherwise comply with Graph Contract v1.0."),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
@@ -704,11 +810,9 @@ export class MyMCP extends McpAgent {
                         throw new Error("Patch application failed.");
                     }
 
-                    Object.entries(patchedDoc.nodes || {}).forEach(([nodeId, node]: [string, any]) => {
-                        normalizeNode(nodeId, node);
-                    });
-                    patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
-                    patchedDoc.nodes = buildHierarchicalNodes(patchedDoc.nodes);
+                    enforceGraphContractOnDocument(patchedDoc);
+                    const validNodeIds = new Set(Object.keys(patchedDoc.nodes || {}));
+                    patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes, { validNodeIds });
 
 
                     // --- Percentage Squishing Logic ---
@@ -718,6 +822,9 @@ export class MyMCP extends McpAgent {
                         const map: Record<string, string[]> = {};
                         for (const nodeId in document.nodes) {
                             const node = document.nodes[nodeId];
+                            if (!node || !Array.isArray(node.parents)) {
+                                continue;
+                            }
                             node.parents.forEach(parentId => {
                                 if (!map[parentId]) {
                                     map[parentId] = [];
@@ -759,13 +866,17 @@ export class MyMCP extends McpAgent {
 
                     if (!hasChanges) {
                         console.log("No changes detected after applying patches. Skipping update.");
+                        const responseDocument = {
+                            ...patchedDoc,
+                            nodes: buildHierarchicalNodes(patchedDoc.nodes)
+                        };
                         return {
                             content: [{
                                 type: "text",
                                 text: JSON.stringify({
                                     success: true,
                                     score_context: calculateScores(patchedDoc.nodes),
-                                    result: patchedDoc
+                                    result: responseDocument
                                 })
                             }]
                         };
@@ -777,13 +888,18 @@ export class MyMCP extends McpAgent {
                     const graphDocumentVersionId = await this.createGraphDocumentVersion(patchedDoc);
                     console.log(`Created graph document version: ${graphDocumentVersionId}`);
 
+                    const responseDocument = {
+                        ...patchedDoc,
+                        nodes: buildHierarchicalNodes(patchedDoc.nodes)
+                    };
+
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
                                 success: true,
                                 score_context: calculateScores(patchedDoc.nodes),
-                                result: patchedDoc,
+                                result: responseDocument,
                                 graph_document_version_id: graphDocumentVersionId
                             })
                         }]
@@ -829,12 +945,17 @@ export class MyMCP extends McpAgent {
                         };
                     }
 
+                    const responseDocument = {
+                        ...versionDoc,
+                        nodes: buildHierarchicalNodes(versionDoc.nodes)
+                    };
+
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
                                 success: true,
-                                result: versionDoc
+                                result: responseDocument
                             })
                         }]
                     };
@@ -883,12 +1004,16 @@ export class MyMCP extends McpAgent {
 
                     if (this.documentsAreEqual(currentDoc, versionDoc)) {
                         console.log("Live document already matches requested version. No update required.");
+                        const responseDocument = {
+                            ...currentDoc,
+                            nodes: buildHierarchicalNodes(currentDoc.nodes)
+                        };
                         return {
                             content: [{
                                 type: "text",
                                 text: JSON.stringify({
                                     success: true,
-                                    result: currentDoc
+                                    result: responseDocument
                                 })
                             }]
                         };
@@ -900,12 +1025,17 @@ export class MyMCP extends McpAgent {
                     const graphDocumentVersionId = await this.createGraphDocumentVersion(versionDoc);
                     console.log(`Created graph document version after set: ${graphDocumentVersionId}`);
 
+                    const responseDocument = {
+                        ...versionDoc,
+                        nodes: buildHierarchicalNodes(versionDoc.nodes)
+                    };
+
                     return {
                         content: [{
                             type: "text",
                             text: JSON.stringify({
                                 success: true,
-                                result: versionDoc,
+                                result: responseDocument,
                                 graph_document_version_id: graphDocumentVersionId
                             })
                         }]
