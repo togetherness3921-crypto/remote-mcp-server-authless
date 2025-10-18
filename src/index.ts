@@ -12,12 +12,17 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY);
 
 type JSONPatch = Operation[];
 
+const MAIN_GRAPH_ID = "main" as const;
 const ALLOWED_STATUSES: Array<Node['status']> = ['not-started', 'in-progress', 'completed'];
 const ALLOWED_STATUS_SET = new Set(ALLOWED_STATUSES);
 const DEFAULT_STATUS: Node['status'] = 'not-started';
 const ALLOWED_NODE_TYPE = 'objectiveNode';
 
 const normalizeNode = (nodeId: string, node: any) => {
+    if (node === null || typeof node !== 'object') {
+        throw new Error(`Invalid node "${nodeId}". Nodes must be JSON objects.`);
+    }
+
     let rawType = node?.type;
     if (typeof rawType === 'string') {
         const lowered = rawType.trim().toLowerCase();
@@ -34,21 +39,102 @@ const normalizeNode = (nodeId: string, node: any) => {
     node.type = ALLOWED_NODE_TYPE;
 
     if (node.status === undefined || node.status === null || node.status === '') {
-        return;
-    }
-    if (typeof node.status !== 'string') {
-        throw new Error(`Invalid status for node "${nodeId}". Status must be a string matching the Graph Contract v1.0 enum.`);
-    }
-    const trimmedStatus = node.status.trim();
-    if (ALLOWED_STATUS_SET.has(trimmedStatus as Node['status'])) {
-        node.status = trimmedStatus as Node['status'];
-        return;
-    }
-    if (trimmedStatus.toLowerCase() === 'pending') {
         node.status = DEFAULT_STATUS;
-        return;
+    } else {
+        if (typeof node.status !== 'string') {
+            throw new Error(`Invalid status for node "${nodeId}". Status must be a string matching the Graph Contract v1.0 enum.`);
+        }
+        const trimmedStatus = node.status.trim();
+        if (ALLOWED_STATUS_SET.has(trimmedStatus as Node['status'])) {
+            node.status = trimmedStatus as Node['status'];
+        } else if (trimmedStatus.toLowerCase() === 'pending') {
+            node.status = DEFAULT_STATUS;
+        } else {
+            throw new Error(`Invalid status "${trimmedStatus}" for node "${nodeId}". Allowed statuses: ${ALLOWED_STATUSES.join(', ')}.`);
+        }
     }
-    throw new Error(`Invalid status "${trimmedStatus}" for node "${nodeId}". Allowed statuses: ${ALLOWED_STATUSES.join(', ')}.`);
+
+    const parentsValue = node.parents;
+    if (parentsValue === undefined || parentsValue === null) {
+        node.parents = [];
+    } else if (Array.isArray(parentsValue)) {
+        const normalizedParents: string[] = [];
+        parentsValue.forEach((parentId, index) => {
+            if (typeof parentId !== 'string') {
+                throw new Error(`Invalid parent entry at index ${index} for node "${nodeId}". Parent identifiers must be strings.`);
+            }
+            const trimmedParent = parentId.trim();
+            if (trimmedParent.length > 0) {
+                normalizedParents.push(trimmedParent);
+            }
+        });
+        node.parents = normalizedParents;
+    } else if (typeof parentsValue === 'string') {
+        const trimmed = parentsValue.trim();
+        node.parents = trimmed.length > 0 ? [trimmed] : [];
+    } else {
+        throw new Error(`Invalid parents value for node "${nodeId}". Parents must be an array of node ids.`);
+    }
+
+    const rawGraphValue = node.graph;
+    if (rawGraphValue === undefined || rawGraphValue === null || rawGraphValue === '') {
+        throw new Error(`Node "${nodeId}" is missing required property "graph". Set "graph" to "${MAIN_GRAPH_ID}" or the id of its container node.`);
+    }
+    if (typeof rawGraphValue !== 'string') {
+        throw new Error(`Invalid graph value for node "${nodeId}". The "graph" property must be a string.`);
+    }
+    const trimmedGraph = rawGraphValue.trim();
+    if (trimmedGraph.length === 0) {
+        throw new Error(`Invalid graph value for node "${nodeId}". The "graph" property cannot be empty.`);
+    }
+    if (trimmedGraph.toLowerCase() === MAIN_GRAPH_ID) {
+        node.graph = MAIN_GRAPH_ID;
+    } else {
+        node.graph = trimmedGraph;
+    }
+};
+
+const enforceGraphMembership = (nodes: Record<string, Node>) => {
+    const nodeEntries = Object.entries(nodes || {});
+    const existingNodeIds = new Set(nodeEntries.map(([id]) => id));
+
+    nodeEntries.forEach(([nodeId, node]) => {
+        const containerId = node.graph;
+        if (containerId === MAIN_GRAPH_ID) {
+            return;
+        }
+        if (!existingNodeIds.has(containerId)) {
+            throw new Error(`Node "${nodeId}" references graph container "${containerId}", but no node with that id exists. Each node's "graph" must be "${MAIN_GRAPH_ID}" or an existing node id.`);
+        }
+        if (containerId === nodeId) {
+            throw new Error(`Node "${nodeId}" cannot use itself as its graph container.`);
+        }
+    });
+
+    nodeEntries.forEach(([nodeId]) => {
+        const seen = new Set<string>([nodeId]);
+        let containerId: string | undefined = nodes[nodeId]?.graph;
+        while (containerId && containerId !== MAIN_GRAPH_ID) {
+            if (seen.has(containerId)) {
+                const cyclePath = Array.from(seen).concat(containerId).join(' -> ');
+                throw new Error(`Graph containment cycle detected (${cyclePath}). Each node's "graph" chain must eventually resolve to "${MAIN_GRAPH_ID}".`);
+            }
+            seen.add(containerId);
+            containerId = nodes[containerId]?.graph;
+        }
+    });
+};
+
+const normalizeGraphDocument = (document: GraphDocument) => {
+    if (!document.nodes || typeof document.nodes !== 'object') {
+        document.nodes = {} as Record<string, Node>;
+    }
+
+    Object.entries(document.nodes).forEach(([nodeId, node]) => {
+        normalizeNode(nodeId, node);
+    });
+
+    enforceGraphMembership(document.nodes);
 };
 
 function calculateTruePercentages(nodes: Record<string, Node>): Record<string, Node> {
@@ -123,8 +209,9 @@ function calculateScores(nodes: Record<string, Node>): object {
 interface Node {
     type: string;
     label: string;
-    status: "not-started" | "in-progress" | "completed" | "blocked";
+    status: "not-started" | "in-progress" | "completed";
     parents: string[];
+    graph: string;
     percentage_of_parent: number;
     createdAt: string;
     scheduled_start?: string;
@@ -218,7 +305,9 @@ export class MyMCP extends McpAgent {
             throw new Error("Graph document not found.");
         }
 
-        return data[0].data;
+        const document = data[0].data;
+        normalizeGraphDocument(document);
+        return document;
     }
 
     private async updateGraphDocument(document: GraphDocument): Promise<void> {
@@ -270,7 +359,9 @@ export class MyMCP extends McpAgent {
             return null;
         }
 
-        return data.data as GraphDocument;
+        const document = data.data as GraphDocument;
+        normalizeGraphDocument(document);
+        return document;
     }
 
     private async getEarliestGraphDocumentVersionId(): Promise<string | null> {
@@ -682,7 +773,7 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "patch_graph_document",
             {
-                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. Graph structure rules are defined in the system instructions (Graph Contract v1.0); node patches must follow that contract."),
+                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. The Graph Contract v1.0 requires every node to include a `graph` field set to `main` or the node id of its explicit container."),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
@@ -710,9 +801,7 @@ export class MyMCP extends McpAgent {
                         throw new Error("Patch application failed.");
                     }
 
-                    Object.entries(patchedDoc.nodes || {}).forEach(([nodeId, node]: [string, any]) => {
-                        normalizeNode(nodeId, node);
-                    });
+                    normalizeGraphDocument(patchedDoc);
                     patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
 
 

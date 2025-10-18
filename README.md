@@ -47,4 +47,8 @@ Update with this configuration:
 }
 ```
 
-Restart Claude and you should see the tools become available. 
+Restart Claude and you should see the tools become available.
+
+## LifeCurrents Graph Contract Notes
+
+This worker enforces the LifeCurrents Graph Contract v1.0. Every node in the graph document must include a `graph` property whose value is either `"main"` or the id of the node that owns its explicit subgraph. See `system-instructions.md` for the authoritative guidance that should be synced into the `system_instructions` table so the AI agent follows the same rules when mutating the graph.
