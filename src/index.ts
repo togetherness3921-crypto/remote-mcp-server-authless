@@ -33,6 +33,17 @@ const normalizeNode = (nodeId: string, node: any) => {
     }
     node.type = ALLOWED_NODE_TYPE;
 
+    const graphValue = node?.graph;
+    if (typeof graphValue !== 'string') {
+        throw new Error(`Node "${nodeId}" is missing the required 'graph' property. Set it to "main" or another node's id.`);
+    }
+    const trimmedGraph = graphValue.trim();
+    if (!trimmedGraph) {
+        throw new Error(`Node "${nodeId}" has an empty 'graph' value. Set it to "main" or another node's id.`);
+    }
+    const normalizedGraph = trimmedGraph.toLowerCase() === 'main' ? 'main' : trimmedGraph;
+    node.graph = normalizedGraph;
+
     if (node.status === undefined || node.status === null || node.status === '') {
         return;
     }
@@ -123,15 +134,87 @@ function calculateScores(nodes: Record<string, Node>): object {
 interface Node {
     type: string;
     label: string;
-    status: "not-started" | "in-progress" | "completed" | "blocked";
+    status: "not-started" | "in-progress" | "completed";
     parents: string[];
     percentage_of_parent: number;
     createdAt: string;
+    graph: string;
     scheduled_start?: string;
     true_percentage_of_total?: number;
 }
 
-// Define the structure of the entire graph document   
+const enforceGraphMembership = (nodes: Record<string, Node>) => {
+    const nodeIds = new Set(Object.keys(nodes));
+    const containmentTargets = new Map<string, string>();
+
+    for (const [nodeId, node] of Object.entries(nodes)) {
+        const graphTarget = node.graph;
+        if (graphTarget === 'main') {
+            continue;
+        }
+
+        if (!nodeIds.has(graphTarget)) {
+            throw new Error(`Node "${nodeId}" references unknown graph container "${graphTarget}". Create that node first or choose a different container.`);
+        }
+
+        if (graphTarget === nodeId) {
+            throw new Error(`Node "${nodeId}" cannot assign itself as its graph container. Use "main" or a different node id.`);
+        }
+
+        containmentTargets.set(nodeId, graphTarget);
+    }
+
+    const visiting = new Set<string>();
+    const visited = new Set<string>();
+
+    const detectCycle = (nodeId: string, stack: string[]) => {
+        if (visiting.has(nodeId)) {
+            const cycleStart = stack.indexOf(nodeId);
+            const cyclePath = cycleStart >= 0 ? stack.slice(cycleStart) : [...stack];
+            cyclePath.push(nodeId);
+            throw new Error(`Graph containment cycle detected via the 'graph' property: ${cyclePath.join(' -> ')}. Update the 'graph' values to break the cycle.`);
+        }
+
+        if (visited.has(nodeId)) {
+            return;
+        }
+
+        visiting.add(nodeId);
+        stack.push(nodeId);
+
+        const container = containmentTargets.get(nodeId);
+        if (container && containmentTargets.has(container)) {
+            detectCycle(container, stack);
+        }
+
+        stack.pop();
+        visiting.delete(nodeId);
+        visited.add(nodeId);
+    };
+
+    containmentTargets.forEach((_container, nodeId) => {
+        if (!visited.has(nodeId)) {
+            detectCycle(nodeId, []);
+        }
+    });
+};
+
+const normalizeGraphDocument = (document: GraphDocument): GraphDocument => {
+    if (!document.nodes || typeof document.nodes !== 'object') {
+        document.nodes = {};
+        return document;
+    }
+
+    Object.entries(document.nodes).forEach(([nodeId, node]) => {
+        normalizeNode(nodeId, node);
+    });
+
+    enforceGraphMembership(document.nodes);
+
+    return document;
+};
+
+// Define the structure of the entire graph document
 interface GraphDocument {
     nodes: Record<string, Node>;
     viewport: {
@@ -218,7 +301,7 @@ export class MyMCP extends McpAgent {
             throw new Error("Graph document not found.");
         }
 
-        return data[0].data;
+        return normalizeGraphDocument(data[0].data);
     }
 
     private async updateGraphDocument(document: GraphDocument): Promise<void> {
@@ -270,7 +353,7 @@ export class MyMCP extends McpAgent {
             return null;
         }
 
-        return data.data as GraphDocument;
+        return normalizeGraphDocument(data.data as GraphDocument);
     }
 
     private async getEarliestGraphDocumentVersionId(): Promise<string | null> {
@@ -682,7 +765,11 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "patch_graph_document",
             {
-                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. Graph structure rules are defined in the system instructions (Graph Contract v1.0); node patches must follow that contract."),
+                patches: z
+                    .string()
+                    .describe(
+                        "JSON string of RFC 6902 operations. Every node must include its 'graph' field (\"main\" or a containing node id) and otherwise comply with the Graph Contract v1.0 described in the system instructions."
+                    ),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
@@ -705,14 +792,12 @@ export class MyMCP extends McpAgent {
                     }
 
                     // Apply the patches and calculate percentages
-                    let patchedDoc = applyPatch(doc, parsedPatches, true, false).newDocument;
+                    let patchedDoc = applyPatch(doc, parsedPatches, true, false).newDocument as GraphDocument;
                     if (!patchedDoc) {
                         throw new Error("Patch application failed.");
                     }
 
-                    Object.entries(patchedDoc.nodes || {}).forEach(([nodeId, node]: [string, any]) => {
-                        normalizeNode(nodeId, node);
-                    });
+                    patchedDoc = normalizeGraphDocument(patchedDoc);
                     patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
 
 
