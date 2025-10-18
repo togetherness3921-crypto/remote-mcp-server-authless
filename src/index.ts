@@ -17,6 +17,48 @@ const ALLOWED_STATUS_SET = new Set(ALLOWED_STATUSES);
 const DEFAULT_STATUS: Node['status'] = 'not-started';
 const ALLOWED_NODE_TYPE = 'objectiveNode';
 
+const buildHierarchicalNodes = (nodes: Record<string, Node>): Record<string, Node> => {
+    const nodesWithChildren: Record<string, any> = JSON.parse(JSON.stringify(nodes));
+    const parentToChildren: Record<string, string[]> = {};
+
+    Object.keys(nodesWithChildren).forEach(id => {
+        nodesWithChildren[id].children = {};
+        const parents = nodesWithChildren[id].parents || [];
+        parents.forEach((parentId: string) => {
+            if (!parentToChildren[parentId]) {
+                parentToChildren[parentId] = [];
+            }
+            parentToChildren[parentId].push(id);
+        });
+    });
+
+    const rootNodes: Record<string, Node> = {};
+    Object.keys(nodesWithChildren).forEach(id => {
+        const node = nodesWithChildren[id];
+        const parents = node.parents || [];
+        const hasParentInSet = parents.some((pId: string) => nodesWithChildren[pId]);
+
+        if (!hasParentInSet) {
+            rootNodes[id] = node;
+        }
+    });
+
+    const buildTree = (nodeIds: string[]) => {
+        const tree: Record<string, Node> = {};
+        nodeIds.forEach(id => {
+            const node = nodesWithChildren[id];
+            if (parentToChildren[id]) {
+                const children = buildTree(parentToChildren[id]);
+                node.children = children;
+            }
+            tree[id] = node;
+        });
+        return tree;
+    };
+
+    return buildTree(Object.keys(rootNodes));
+};
+
 const normalizeNode = (nodeId: string, node: any) => {
     let rawType = node?.type;
     if (typeof rawType === 'string') {
@@ -506,6 +548,8 @@ export class MyMCP extends McpAgent {
                     const resultGraphWithPercentages = calculateTruePercentages(resultGraph);
                     console.log("Successfully calculated true percentages.");
 
+                    const hierarchicalStructure = buildHierarchicalNodes(resultGraphWithPercentages);
+
                     return {
                         content: [{
                             type: "text",
@@ -513,7 +557,7 @@ export class MyMCP extends McpAgent {
                                 success: true,
                                 current_date: new Date().toISOString(),
                                 score_context: calculateScores(doc.nodes),
-                                context: resultGraphWithPercentages
+                                context: hierarchicalStructure
                             }, null, 2)
                         }]
                     };
@@ -598,6 +642,8 @@ export class MyMCP extends McpAgent {
                     const resultNodesWithPercentages = calculateTruePercentages(resultNodes);
                     console.log("Successfully calculated true percentages for graph structure.");
 
+                    const hierarchicalStructure = buildHierarchicalNodes(resultNodesWithPercentages);
+
                     return {
                         content: [{
                             type: "text",
@@ -605,7 +651,7 @@ export class MyMCP extends McpAgent {
                                 success: true,
                                 current_date: currentDate,
                                 score_context: scoreContext,
-                                structure: resultNodesWithPercentages
+                                structure: hierarchicalStructure
                             })
                         }]
                     };
@@ -662,6 +708,7 @@ export class MyMCP extends McpAgent {
                         normalizeNode(nodeId, node);
                     });
                     patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
+                    patchedDoc.nodes = buildHierarchicalNodes(patchedDoc.nodes);
 
 
                     // --- Percentage Squishing Logic ---
