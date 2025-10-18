@@ -17,7 +17,56 @@ const ALLOWED_STATUS_SET = new Set(ALLOWED_STATUSES);
 const DEFAULT_STATUS: Node['status'] = 'not-started';
 const ALLOWED_NODE_TYPE = 'objectiveNode';
 
+const GRAPH_CONTRACT_SECTION_HEADING = "### Graph Containment and Causality";
+
+const GRAPH_CONTRACT_SECTION = `${GRAPH_CONTRACT_SECTION_HEADING}
+
+- Every objective node MUST include a \`graph\` property.
+- Use \`graph: "main"\` for nodes that live on the primary canvas.
+- Use \`graph: "<container_node_id>"\` to place the node inside the explicit subgraph owned by that container node. The container must exist in the same document.
+- The \`graph\` property encodes containment only. Causal edges remain defined *exclusively* by the \`parents\` array.
+- Never assume containment from parents (or vice versa); manage each dimension deliberately.
+- A node's \`graph\` value cannot equal its own \`nodeId\`, and it must never reference a node that does not exist.
+- When moving or deleting nodes, update other nodes' \`graph\` assignments first so that no node points to a missing container.
+
+Example:
+\`\`\`json
+{
+  "strategy": {
+    "type": "objectiveNode",
+    "graph": "main",
+    "parents": []
+  },
+  "launch_app": {
+    "type": "objectiveNode",
+    "graph": "strategy",
+    "parents": ["strategy"]
+  },
+  "qa_plan": {
+    "type": "objectiveNode",
+    "graph": "strategy",
+    "parents": []
+  }
+}
+\`\`\`
+
+In this example both \`launch_app\` and \`qa_plan\` live inside the \`strategy\` subgraph, yet only \`launch_app\` is causally dependent on \`strategy\` through its \`parents\` array.`;
+
+const ensureGraphInstructions = (content: string | null | undefined) => {
+    const base = (content ?? "").trimEnd();
+    const hasSection = base.toLowerCase().includes(GRAPH_CONTRACT_SECTION_HEADING.toLowerCase());
+    if (hasSection) {
+        return { content: base, updated: false };
+    }
+    const separator = base.length > 0 ? "\n\n" : "";
+    return { content: `${base}${separator}${GRAPH_CONTRACT_SECTION}`.trim(), updated: true };
+};
+
 const normalizeNode = (nodeId: string, node: any) => {
+    if (!node || typeof node !== "object") {
+        throw new Error(`Invalid node payload for "${nodeId}". Expected an object following Graph Contract v1.0.`);
+    }
+
     let rawType = node?.type;
     if (typeof rawType === 'string') {
         const lowered = rawType.trim().toLowerCase();
@@ -34,21 +83,97 @@ const normalizeNode = (nodeId: string, node: any) => {
     node.type = ALLOWED_NODE_TYPE;
 
     if (node.status === undefined || node.status === null || node.status === '') {
-        return;
-    }
-    if (typeof node.status !== 'string') {
-        throw new Error(`Invalid status for node "${nodeId}". Status must be a string matching the Graph Contract v1.0 enum.`);
-    }
-    const trimmedStatus = node.status.trim();
-    if (ALLOWED_STATUS_SET.has(trimmedStatus as Node['status'])) {
-        node.status = trimmedStatus as Node['status'];
-        return;
-    }
-    if (trimmedStatus.toLowerCase() === 'pending') {
         node.status = DEFAULT_STATUS;
-        return;
+    } else {
+        if (typeof node.status !== 'string') {
+            throw new Error(`Invalid status for node "${nodeId}". Status must be a string matching the Graph Contract v1.0 enum.`);
+        }
+        const trimmedStatus = node.status.trim();
+        if (ALLOWED_STATUS_SET.has(trimmedStatus as Node['status'])) {
+            node.status = trimmedStatus as Node['status'];
+        } else if (trimmedStatus.toLowerCase() === 'pending') {
+            node.status = DEFAULT_STATUS;
+        } else {
+            throw new Error(`Invalid status "${trimmedStatus}" for node "${nodeId}". Allowed statuses: ${ALLOWED_STATUSES.join(', ')}.`);
+        }
     }
-    throw new Error(`Invalid status "${trimmedStatus}" for node "${nodeId}". Allowed statuses: ${ALLOWED_STATUSES.join(', ')}.`);
+
+    if (!Array.isArray(node.parents)) {
+        if (node.parents === undefined || node.parents === null) {
+            node.parents = [];
+        } else {
+            throw new Error(`Invalid parents for node "${nodeId}". Parents must be an array of node IDs.`);
+        }
+    }
+    node.parents = node.parents
+        .map((parentId: any) => {
+            if (typeof parentId !== 'string') {
+                throw new Error(`Invalid parent reference for node "${nodeId}". Parent IDs must be strings.`);
+            }
+            const trimmedParent = parentId.trim();
+            if (!trimmedParent) {
+                throw new Error(`Invalid parent reference for node "${nodeId}". Parent IDs cannot be empty.`);
+            }
+            return trimmedParent;
+        });
+
+    const graphValue = node.graph;
+    if (graphValue === undefined || graphValue === null) {
+        throw new Error(`Node "${nodeId}" is missing required property \"graph\". The Graph Contract v1.0 mandates explicit containment membership.`);
+    }
+    if (typeof graphValue !== 'string') {
+        throw new Error(`Invalid \"graph\" value for node "${nodeId}". Expected a string identifying the container graph.`);
+    }
+    const trimmedGraph = graphValue.trim();
+    if (!trimmedGraph) {
+        throw new Error(`Node "${nodeId}" has an empty \"graph\" value. Use \"main\" or a valid container node ID.`);
+    }
+    node.graph = trimmedGraph.toLowerCase() === 'main' ? 'main' : trimmedGraph;
+};
+
+const enforceGraphContainment = (nodes: Record<string, Node>) => {
+    const nodeIds = new Set(Object.keys(nodes));
+    const violations: string[] = [];
+
+    for (const [nodeId, node] of Object.entries(nodes)) {
+        if (!node) {
+            violations.push(`Node "${nodeId}" is undefined after patch application.`);
+            continue;
+        }
+
+        if (node.graph === 'main') {
+            continue;
+        }
+
+        if (node.graph === nodeId) {
+            violations.push(`Node "${nodeId}" cannot reference itself in the \"graph\" property.`);
+            continue;
+        }
+
+        if (!nodeIds.has(node.graph)) {
+            violations.push(`Node "${nodeId}" references missing container "${node.graph}" in its \"graph\" property.`);
+        }
+    }
+
+    if (violations.length > 0) {
+        throw new Error(`Graph Contract violation(s): ${violations.join(' ')}`);
+    }
+};
+
+const normalizeGraphDocument = (document: GraphDocument) => {
+    if (!document || typeof document !== 'object') {
+        throw new Error('Invalid graph document structure. Expected an object following Graph Contract v1.0.');
+    }
+
+    if (!document.nodes || typeof document.nodes !== 'object') {
+        throw new Error('Invalid graph document: missing required "nodes" map.');
+    }
+
+    Object.entries(document.nodes).forEach(([nodeId, node]) => {
+        normalizeNode(nodeId, node);
+    });
+
+    enforceGraphContainment(document.nodes);
 };
 
 function calculateTruePercentages(nodes: Record<string, Node>): Record<string, Node> {
@@ -129,6 +254,7 @@ interface Node {
     createdAt: string;
     scheduled_start?: string;
     true_percentage_of_total?: number;
+    graph: string;
 }
 
 // Define the structure of the entire graph document   
@@ -218,7 +344,9 @@ export class MyMCP extends McpAgent {
             throw new Error("Graph document not found.");
         }
 
-        return data[0].data;
+        const document = data[0].data;
+        normalizeGraphDocument(document);
+        return document;
     }
 
     private async updateGraphDocument(document: GraphDocument): Promise<void> {
@@ -270,7 +398,9 @@ export class MyMCP extends McpAgent {
             return null;
         }
 
-        return data.data as GraphDocument;
+        const document = data.data as GraphDocument;
+        normalizeGraphDocument(document);
+        return document;
     }
 
     private async getEarliestGraphDocumentVersionId(): Promise<string | null> {
@@ -345,10 +475,10 @@ export class MyMCP extends McpAgent {
         type UpdateSystemInstructionsArgs = z.infer<typeof updateSystemInstructionsParams> & { instruction_id?: string, dry_run?: boolean };
 
         // 0. Tool to get instructions
-        this.server.tool<GetSystemInstructionsArgs>(
+        this.server.tool(
             "get_system_instructions",
             getSystemInstructionsParams.shape,
-            async (args: GetSystemInstructionsArgs, _extra) => {
+            async (args: GetSystemInstructionsArgs, _extra: unknown) => {
                 const instructionId = args?.instruction_id;
                 console.log("Attempting to execute get_system_instructions...");
                 try {
@@ -376,11 +506,38 @@ export class MyMCP extends McpAgent {
                     }
 
                     console.log("Successfully fetched instructions.");
+
+                    let normalizedContent = data.content ?? '';
+                    let appended = false;
+                    try {
+                        const ensureResult = ensureGraphInstructions(normalizedContent);
+                        normalizedContent = ensureResult.content;
+                        appended = ensureResult.updated;
+
+                        if (appended) {
+                            console.log("Graph containment section missing; updating stored instructions to include it.");
+                            const { error: ensureError } = await supabase
+                                .from('system_instructions')
+                                .update({ content: normalizedContent })
+                                .eq('id', instructionId);
+
+                            if (ensureError) {
+                                console.error("Failed to persist normalized instructions:", ensureError);
+                            }
+                        }
+                    } catch (normalizationError) {
+                        console.error("Failed to normalize system instructions:", normalizationError);
+                    }
+
                     const payloadData: Record<string, unknown> = {
                         instruction_id: data.id,
-                        content: data.content,
-                        content_length: data.content?.length ?? 0,
+                        content: normalizedContent,
+                        content_length: normalizedContent.length,
                     };
+
+                    if (appended) {
+                        payloadData.graph_containment_section_added = true;
+                    }
 
                     if (data.updated_at) {
                         payloadData.updated_at = data.updated_at;
@@ -397,10 +554,10 @@ export class MyMCP extends McpAgent {
         );
 
         // New Tool: Update Tool Instructions
-        this.server.tool<UpdateSystemInstructionsArgs>(
+        this.server.tool(
             "update_system_instructions",
             updateSystemInstructionsParams.shape,
-            async (args: UpdateSystemInstructionsArgs, _extra) => {
+            async (args: UpdateSystemInstructionsArgs, _extra: unknown) => {
                 const { new_instructions_content, instruction_id, dry_run } = args;
                 const instructionId = instruction_id;
                 console.log("Attempting to execute update_system_instructions...");
@@ -408,15 +565,6 @@ export class MyMCP extends McpAgent {
                 try {
                     if (!instructionId) {
                         throw new Error("System error: instruction_id was not provided by the client.");
-                    }
-
-                    const trimmedContent = new_instructions_content.trim();
-                    if (trimmedContent.length === 0) {
-                        console.warn("Rejected update due to empty instruction content.");
-                        return createToolResponse("update_system_instructions", false, undefined, {
-                            message: "Instruction content cannot be empty.",
-                            code: "EMPTY_CONTENT",
-                        });
                     }
 
                     console.log(`Fetching existing instruction '${instructionId}' for comparison...`);
@@ -439,11 +587,42 @@ export class MyMCP extends McpAgent {
                         });
                     }
 
-                    const currentContent = existingInstruction.content ?? "";
-                    const currentLength = currentContent.length;
-                    const newLength = new_instructions_content.length;
+                    const existingContent = existingInstruction.content ?? "";
+                    let normalizedExistingContent = existingContent;
+                    let existingAppended = false;
+                    try {
+                        const ensureResult = ensureGraphInstructions(existingContent);
+                        normalizedExistingContent = ensureResult.content;
+                        existingAppended = ensureResult.updated;
+                        if (existingAppended) {
+                            console.log("Persisting missing graph containment guidance onto existing instructions before comparison.");
+                            const { error: ensureError } = await supabase
+                                .from('system_instructions')
+                                .update({ content: normalizedExistingContent })
+                                .eq('id', instructionId);
+                            if (ensureError) {
+                                console.error("Failed to normalize existing instructions prior to update:", ensureError);
+                            }
+                        }
+                    } catch (existingNormalizationError) {
+                        console.error("Failed to normalize existing system instructions:", existingNormalizationError);
+                    }
 
-                    if (!dry_run && new_instructions_content === currentContent) {
+                    const currentLength = normalizedExistingContent.length;
+
+                    const trimmedContent = new_instructions_content.trim();
+                    if (trimmedContent.length === 0) {
+                        console.warn("Rejected update due to empty instruction content.");
+                        return createToolResponse("update_system_instructions", false, undefined, {
+                            message: "Instruction content cannot be empty.",
+                            code: "EMPTY_CONTENT",
+                        });
+                    }
+
+                    const { content: normalizedNewContent, updated: appendedNewSection } = ensureGraphInstructions(trimmedContent);
+                    const newLength = normalizedNewContent.length;
+
+                    if (!dry_run && normalizedNewContent === normalizedExistingContent) {
                         console.log("No changes detected; skipping update.");
                         return createToolResponse("update_system_instructions", true, {
                             instruction_id: instructionId,
@@ -460,13 +639,14 @@ export class MyMCP extends McpAgent {
                             updated: false,
                             content_length: newLength,
                             summary: `Dry run: instruction '${instructionId}' would be updated (${currentLength} -> ${newLength} chars).`,
+                            graph_containment_section_added: appendedNewSection && !existingAppended,
                         });
                     }
 
                     console.log("Updating system instructions in Supabase...");
                     const { error: updateError } = await supabase
                         .from('system_instructions')
-                        .update({ content: new_instructions_content })
+                        .update({ content: normalizedNewContent })
                         .eq('id', instructionId);
 
                     if (updateError) {
@@ -480,6 +660,7 @@ export class MyMCP extends McpAgent {
                         updated: true,
                         content_length: newLength,
                         summary: `Instruction '${instructionId}' updated (${currentLength} -> ${newLength} chars).`,
+                        graph_containment_section_added: appendedNewSection && !existingAppended,
                     });
                 } catch (error: any) {
                     console.error("Caught error in update_system_instructions:", error);
@@ -682,7 +863,7 @@ export class MyMCP extends McpAgent {
         this.server.tool(
             "patch_graph_document",
             {
-                patches: z.string().describe("JSON string of an array of RFC 6902 patch operations. Graph structure rules are defined in the system instructions (Graph Contract v1.0); node patches must follow that contract."),
+                patches: z.string().describe("JSON string of RFC 6902 operations. Each node MUST include a `graph` property (`\"main\"` or another nodeId) that encodes containment, independent from the causal `parents` array. Patches must leave the graph document compliant with the Graph Contract v1.0 or they will be rejected."),
             },
             async ({ patches }) => {
                 console.log("Attempting to execute patch_graph_document...");
@@ -705,14 +886,12 @@ export class MyMCP extends McpAgent {
                     }
 
                     // Apply the patches and calculate percentages
-                    let patchedDoc = applyPatch(doc, parsedPatches, true, false).newDocument;
+                    let patchedDoc = applyPatch(doc, parsedPatches, true, false).newDocument as GraphDocument;
                     if (!patchedDoc) {
                         throw new Error("Patch application failed.");
                     }
 
-                    Object.entries(patchedDoc.nodes || {}).forEach(([nodeId, node]: [string, any]) => {
-                        normalizeNode(nodeId, node);
-                    });
+                    normalizeGraphDocument(patchedDoc);
                     patchedDoc.nodes = calculateTruePercentages(patchedDoc.nodes);
 
 
