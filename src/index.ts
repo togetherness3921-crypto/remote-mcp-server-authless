@@ -4,6 +4,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Operation, applyPatch } from "fast-json-patch";
 import { createClient } from '@supabase/supabase-js';
+import { SummariesService } from "./summaries";
 
 // Initialize Supabase client
 const SUPABASE_URL = "https://cvzgxnspmmxxxwnxiydk.supabase.co";
@@ -288,8 +289,21 @@ export class MyMCP extends McpAgent {
         version: "1.0.0",
     });
 
+    private summariesService = new SummariesService(supabase, (event, payload) => this.emitSSEEvent(event, payload));
+
     constructor(state?: any, env?: any) {
         super(state, env);
+    }
+
+    private emitSSEEvent(event: string, payload: Record<string, unknown>) {
+        try {
+            const socket = this.getWebSocket();
+            if (socket) {
+                socket.send(JSON.stringify({ jsonrpc: "2.0", method: event, params: payload }));
+            }
+        } catch (error) {
+            console.error("Failed to emit SSE event", { event, error });
+        }
     }
 
     private async getGraphDocument(): Promise<GraphDocument> {
@@ -584,6 +598,138 @@ export class MyMCP extends McpAgent {
                 } catch (error: any) {
                     console.error("Caught error in update_system_instructions:", error);
                     return createToolResponse("update_system_instructions", false, undefined, {
+                        message: error?.message ?? "Unknown error",
+                    });
+                }
+            }
+        );
+
+        const composeContextParams = z.object({
+            conversation_id: z.string(),
+            current_message_id: z.string(),
+            mode: z.enum(["intelligent"]),
+            summarization_prompt: z.string().optional(),
+            timezone: z.string().optional(),
+        });
+
+        this.server.tool(
+            "summaries.compose_context_for_turn",
+            composeContextParams.shape,
+            async (args: z.infer<typeof composeContextParams>) => {
+                try {
+                    const result = await this.summariesService.composeContextForTurn({
+                        conversationId: args.conversation_id,
+                        currentMessageId: args.current_message_id,
+                        mode: args.mode,
+                        summarizationPrompt: args.summarization_prompt,
+                        timezone: args.timezone,
+                    });
+                    return createToolResponse(
+                        "summaries.compose_context_for_turn",
+                        true,
+                        result as unknown as Record<string, unknown>,
+                    );
+                } catch (error: any) {
+                    console.error("summaries.compose_context_for_turn failed", error);
+                    return createToolResponse("summaries.compose_context_for_turn", false, undefined, {
+                        message: error?.message ?? "Unknown error",
+                    });
+                }
+            }
+        );
+
+        const listRequiredParams = z.object({
+            conversation_id: z.string(),
+            current_message_id: z.string(),
+            timezone: z.string().optional(),
+        });
+
+        this.server.tool(
+            "summaries.list_required",
+            listRequiredParams.shape,
+            async (args: z.infer<typeof listRequiredParams>) => {
+                try {
+                    const result = await this.summariesService.listRequiredSummaries({
+                        conversationId: args.conversation_id,
+                        currentMessageId: args.current_message_id,
+                        timezone: args.timezone,
+                    });
+                    return createToolResponse(
+                        "summaries.list_required",
+                        true,
+                        result as unknown as Record<string, unknown>,
+                    );
+                } catch (error: any) {
+                    console.error("summaries.list_required failed", error);
+                    return createToolResponse("summaries.list_required", false, undefined, {
+                        message: error?.message ?? "Unknown error",
+                    });
+                }
+            }
+        );
+
+        const getSummariesParams = z.object({
+            conversation_id: z.string(),
+            levels: z.array(z.enum(["DAY", "WEEK", "MONTH"])).optional(),
+            start: z.string().optional(),
+            end: z.string().optional(),
+        });
+
+        this.server.tool(
+            "summaries.get",
+            getSummariesParams.shape,
+            async (args: z.infer<typeof getSummariesParams>) => {
+                try {
+                    const summaries = await this.summariesService.getSummaries({
+                        conversationId: args.conversation_id,
+                        levels: args.levels,
+                        start: args.start,
+                        end: args.end,
+                    });
+                    return createToolResponse(
+                        "summaries.get",
+                        true,
+                        { summaries } as unknown as Record<string, unknown>,
+                    );
+                } catch (error: any) {
+                    console.error("summaries.get failed", error);
+                    return createToolResponse("summaries.get", false, undefined, {
+                        message: error?.message ?? "Unknown error",
+                    });
+                }
+            }
+        );
+
+        const generateSummaryParams = z.object({
+            conversation_id: z.string(),
+            level: z.enum(["DAY", "WEEK", "MONTH"]),
+            period_start: z.string(),
+            current_message_id: z.string(),
+            summarization_prompt: z.string().optional(),
+            timezone: z.string().optional(),
+        });
+
+        this.server.tool(
+            "summaries.generate",
+            generateSummaryParams.shape,
+            async (args: z.infer<typeof generateSummaryParams>) => {
+                try {
+                    const result = await this.summariesService.generateSummary({
+                        conversationId: args.conversation_id,
+                        level: args.level,
+                        periodStart: args.period_start,
+                        currentMessageId: args.current_message_id,
+                        summarizationPrompt: args.summarization_prompt,
+                        timezone: args.timezone,
+                    });
+                    return createToolResponse(
+                        "summaries.generate",
+                        true,
+                        result as unknown as Record<string, unknown>,
+                    );
+                } catch (error: any) {
+                    console.error("summaries.generate failed", error);
+                    return createToolResponse("summaries.generate", false, undefined, {
                         message: error?.message ?? "Unknown error",
                     });
                 }
