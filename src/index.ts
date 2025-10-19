@@ -236,6 +236,38 @@ interface GraphDocument {
 
 type NodeWithChildren = Node & { children: Record<string, NodeWithChildren> };
 
+type SummaryLevel = 'DAY' | 'WEEK' | 'MONTH';
+
+interface ConversationSummaryRecord {
+    id: string;
+    conversation_id: string;
+    summary_level: SummaryLevel;
+    summary_period_start: string;
+    content: string;
+    created_by_message_id: string;
+    created_at?: string;
+}
+
+type ConversationSummaryResponse = {
+    id: string;
+    summary_level: SummaryLevel;
+    summary_period_start: string;
+    content: string;
+    created_by_message_id: string;
+    created_at?: string;
+};
+
+interface MinimalChatMessageRow {
+    id: string;
+    conversation_id: string;
+    parent_message_id: string | null;
+}
+
+interface ChatMessageRow extends MinimalChatMessageRow {
+    created_at: string;
+    [key: string]: unknown;
+}
+
 const buildHierarchicalNodes = (nodes: Record<string, Node>): Record<string, NodeWithChildren> => {
     const nodeIds = Object.keys(nodes);
     if (nodeIds.length === 0) {
@@ -391,6 +423,103 @@ export class MyMCP extends McpAgent {
         return JSON.stringify(a) === JSON.stringify(b);
     }
 
+    private normalizeId(value: string, fieldName: string): string {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            throw new Error(`${fieldName} cannot be empty.`);
+        }
+        return trimmed;
+    }
+
+    private normalizeIsoTimestamp(value: string, fieldName: string): string {
+        const trimmed = value.trim();
+        if (!trimmed) {
+            throw new Error(`${fieldName} must be a non-empty ISO 8601 timestamp.`);
+        }
+
+        const parsed = new Date(trimmed);
+        if (Number.isNaN(parsed.getTime())) {
+            throw new Error(`${fieldName} must be a valid ISO 8601 timestamp.`);
+        }
+
+        return parsed.toISOString();
+    }
+
+    private async fetchMessageAncestorRow(
+        conversationId: string,
+        messageId: string,
+        fieldLabel: string,
+    ): Promise<MinimalChatMessageRow> {
+        const normalizedConversationId = this.normalizeId(conversationId, 'conversation_id');
+        const normalizedMessageId = this.normalizeId(messageId, fieldLabel);
+
+        const { data, error } = await supabase
+            .from('chat_messages')
+            .select('id, conversation_id, parent_message_id')
+            .eq('conversation_id', normalizedConversationId)
+            .eq('id', normalizedMessageId)
+            .maybeSingle();
+
+        if (error) {
+            throw new Error(`Failed to fetch ${fieldLabel} "${normalizedMessageId}" for conversation "${normalizedConversationId}": ${error.message}`);
+        }
+
+        if (!data) {
+            throw new Error(`Message "${normalizedMessageId}" (from ${fieldLabel}) was not found in conversation "${normalizedConversationId}".`);
+        }
+
+        return data as MinimalChatMessageRow;
+    }
+
+    private async ensureMessageBelongsToConversation(conversationId: string, messageId: string): Promise<void> {
+        await this.fetchMessageAncestorRow(conversationId, messageId, 'message_id');
+    }
+
+    private async getAncestralMessageIds(conversationId: string, messageId: string): Promise<string[]> {
+        const normalizedConversationId = this.normalizeId(conversationId, 'conversation_id');
+        const normalizedMessageId = this.normalizeId(messageId, 'message_id');
+
+        const ancestorIds: string[] = [];
+        const visited = new Set<string>();
+        let currentMessageId: string | null = normalizedMessageId;
+
+        while (currentMessageId) {
+            if (visited.has(currentMessageId)) {
+                throw new Error(`Detected a circular parent relationship involving message "${currentMessageId}" in conversation "${normalizedConversationId}".`);
+            }
+
+            visited.add(currentMessageId);
+
+            const row = await this.fetchMessageAncestorRow(
+                normalizedConversationId,
+                currentMessageId,
+                currentMessageId === normalizedMessageId ? 'message_id' : 'parent_message_id',
+            );
+
+            ancestorIds.push(row.id);
+            currentMessageId = row.parent_message_id;
+        }
+
+        return ancestorIds;
+    }
+
+    private toConversationSummaryResponse(row: ConversationSummaryRecord): ConversationSummaryResponse {
+        const { id, summary_level, summary_period_start, content, created_by_message_id, created_at } = row;
+        const summary: ConversationSummaryResponse = {
+            id,
+            summary_level,
+            summary_period_start,
+            content,
+            created_by_message_id,
+        };
+
+        if (created_at) {
+            summary.created_at = created_at;
+        }
+
+        return summary;
+    }
+
 
     async init() {
         type MCPCallToolResult = z.infer<typeof CallToolResultSchema>;
@@ -439,6 +568,32 @@ export class MyMCP extends McpAgent {
         });
 
         type UpdateSystemInstructionsArgs = z.infer<typeof updateSystemInstructionsParams> & { instruction_id?: string, dry_run?: boolean };
+
+        const getConversationSummariesParams = z.object({
+            conversation_id: z.string().describe('Conversation identifier for the thread.'),
+            message_id: z.string().describe('Head message identifier for the branch.'),
+        });
+
+        type GetConversationSummariesArgs = z.infer<typeof getConversationSummariesParams>;
+
+        const createConversationSummaryParams = z.object({
+            conversation_id: z.string().describe('Conversation identifier for the thread.'),
+            summary_level: z.enum(['DAY', 'WEEK', 'MONTH']).describe('Tier of the summary.'),
+            summary_period_start: z.string().describe('ISO8601 start timestamp for the summarised period.'),
+            content: z.string().describe('Summary content to persist.'),
+            created_by_message_id: z.string().describe('Message that triggered the summarisation.'),
+        });
+
+        type CreateConversationSummaryArgs = z.infer<typeof createConversationSummaryParams>;
+
+        const getMessagesForPeriodParams = z.object({
+            conversation_id: z.string().describe('Conversation identifier for the thread.'),
+            message_id: z.string().describe('Head message identifier for the branch.'),
+            period_start: z.string().describe('Inclusive ISO8601 timestamp for the beginning of the window.'),
+            period_end: z.string().describe('Inclusive ISO8601 timestamp for the end of the window.'),
+        });
+
+        type GetMessagesForPeriodArgs = z.infer<typeof getMessagesForPeriodParams>;
 
         // 0. Tool to get instructions
         this.server.tool<GetSystemInstructionsArgs>(
@@ -1164,6 +1319,153 @@ export class MyMCP extends McpAgent {
                             text: JSON.stringify({ tool: 'set_user_setting', status: 'failed', error: error.message }),
                         }],
                     };
+                }
+            }
+        );
+
+        this.server.tool<GetConversationSummariesArgs>(
+            'get_conversation_summaries',
+            getConversationSummariesParams.shape,
+            async ({ conversation_id, message_id }) => {
+                try {
+                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
+                    const normalizedMessageId = this.normalizeId(message_id, 'message_id');
+                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
+                    const uniqueAncestorIds = Array.from(new Set(ancestorIds));
+
+                    if (uniqueAncestorIds.length === 0) {
+                        return createToolResponse('get_conversation_summaries', true, { summaries: [] });
+                    }
+
+                    const { data, error } = await supabase
+                        .from('conversation_summaries')
+                        .select('id, summary_level, summary_period_start, content, created_by_message_id, created_at, conversation_id')
+                        .eq('conversation_id', normalizedConversationId)
+                        .in('created_by_message_id', uniqueAncestorIds)
+                        .order('summary_period_start', { ascending: true })
+                        .order('summary_level', { ascending: true })
+                        .order('created_at', { ascending: true });
+
+                    if (error) {
+                        throw new Error(`Failed to fetch conversation summaries: ${error.message}`);
+                    }
+
+                    const rawSummaries = (data ?? []) as ConversationSummaryRecord[];
+                    const summaries = rawSummaries.map((row) => this.toConversationSummaryResponse(row));
+
+                    return createToolResponse('get_conversation_summaries', true, { summaries });
+                } catch (error: any) {
+                    return createToolResponse('get_conversation_summaries', false, undefined, { message: error?.message ?? 'Unknown error' });
+                }
+            }
+        );
+
+        this.server.tool<CreateConversationSummaryArgs>(
+            'create_conversation_summary',
+            createConversationSummaryParams.shape,
+            async ({ conversation_id, summary_level, summary_period_start, content, created_by_message_id }) => {
+                try {
+                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
+                    const normalizedMessageId = this.normalizeId(created_by_message_id, 'created_by_message_id');
+                    const normalizedPeriodStart = this.normalizeIsoTimestamp(summary_period_start, 'summary_period_start');
+
+                    if (content.trim().length === 0) {
+                        throw new Error('Summary content cannot be empty.');
+                    }
+
+                    await this.ensureMessageBelongsToConversation(normalizedConversationId, normalizedMessageId);
+
+                    const insertPayload = {
+                        conversation_id: normalizedConversationId,
+                        summary_level,
+                        summary_period_start: normalizedPeriodStart,
+                        content,
+                        created_by_message_id: normalizedMessageId,
+                    } satisfies Omit<ConversationSummaryRecord, 'id' | 'created_at'>;
+
+                    const { data, error } = await supabase
+                        .from('conversation_summaries')
+                        .insert(insertPayload)
+                        .select('id, summary_level, summary_period_start, content, created_by_message_id, created_at, conversation_id')
+                        .single();
+
+                    if (error) {
+                        if (error.code === '23505') {
+                            const { data: existingSummary, error: fetchError } = await supabase
+                                .from('conversation_summaries')
+                                .select('id, summary_level, summary_period_start, content, created_by_message_id, created_at, conversation_id')
+                                .eq('conversation_id', normalizedConversationId)
+                                .eq('summary_level', summary_level)
+                                .eq('summary_period_start', normalizedPeriodStart)
+                                .eq('created_by_message_id', normalizedMessageId)
+                                .maybeSingle();
+
+                            if (fetchError) {
+                                throw new Error(`Summary already exists, but it could not be retrieved: ${fetchError.message}`);
+                            }
+
+                            if (!existingSummary) {
+                                throw new Error('Summary already exists, but it could not be retrieved.');
+                            }
+
+                            return createToolResponse('create_conversation_summary', true, { summary: this.toConversationSummaryResponse(existingSummary as ConversationSummaryRecord) });
+                        }
+
+                        throw new Error(`Failed to create conversation summary: ${error.message}`);
+                    }
+
+                    if (!data) {
+                        throw new Error('Failed to create conversation summary: insert returned no data.');
+                    }
+
+                    return createToolResponse('create_conversation_summary', true, { summary: this.toConversationSummaryResponse(data as ConversationSummaryRecord) });
+                } catch (error: any) {
+                    return createToolResponse('create_conversation_summary', false, undefined, { message: error?.message ?? 'Unknown error' });
+                }
+            }
+        );
+
+        this.server.tool<GetMessagesForPeriodArgs>(
+            'get_messages_for_period',
+            getMessagesForPeriodParams.shape,
+            async ({ conversation_id, message_id, period_start, period_end }) => {
+                try {
+                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
+                    const normalizedMessageId = this.normalizeId(message_id, 'message_id');
+                    const normalizedPeriodStart = this.normalizeIsoTimestamp(period_start, 'period_start');
+                    const normalizedPeriodEnd = this.normalizeIsoTimestamp(period_end, 'period_end');
+
+                    const startDate = new Date(normalizedPeriodStart);
+                    const endDate = new Date(normalizedPeriodEnd);
+                    if (startDate >= endDate) {
+                        throw new Error('period_end must be after period_start.');
+                    }
+
+                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
+                    const uniqueAncestorIds = Array.from(new Set(ancestorIds));
+
+                    if (uniqueAncestorIds.length === 0) {
+                        return createToolResponse('get_messages_for_period', true, { messages: [] });
+                    }
+
+                    const { data, error } = await supabase
+                        .from('chat_messages')
+                        .select('*')
+                        .eq('conversation_id', normalizedConversationId)
+                        .in('id', uniqueAncestorIds)
+                        .gte('created_at', normalizedPeriodStart)
+                        .lte('created_at', normalizedPeriodEnd)
+                        .order('created_at', { ascending: true });
+
+                    if (error) {
+                        throw new Error(`Failed to fetch messages for period: ${error.message}`);
+                    }
+
+                    const messages = (data ?? []) as ChatMessageRow[];
+
+                    return createToolResponse('get_messages_for_period', true, { messages });
+                } catch (error: any) {
+                    return createToolResponse('get_messages_for_period', false, undefined, { message: error?.message ?? 'Unknown error' });
                 }
             }
         );
