@@ -4,6 +4,7 @@ import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Operation, applyPatch } from "fast-json-patch";
 import { createClient } from '@supabase/supabase-js';
+import { SummaryCoordinator, type SummaryLevel } from "./summaries/service";
 
 // Initialize Supabase client
 const SUPABASE_URL = "https://cvzgxnspmmxxxwnxiydk.supabase.co";
@@ -288,8 +289,22 @@ export class MyMCP extends McpAgent {
         version: "1.0.0",
     });
 
+    private readonly summaryCoordinator: SummaryCoordinator;
+
     constructor(state?: any, env?: any) {
         super(state, env);
+        this.summaryCoordinator = new SummaryCoordinator(supabase, event => {
+            try {
+                const broadcaster = (this as any)?.broadcast;
+                if (typeof broadcaster === "function") {
+                    broadcaster.call(this, JSON.stringify(event));
+                } else {
+                    console.warn("Broadcast function is unavailable; skipping summary event", event);
+                }
+            } catch (error) {
+                console.warn("Failed to broadcast summary event", error);
+            }
+        });
     }
 
     private async getGraphDocument(): Promise<GraphDocument> {
@@ -917,6 +932,120 @@ export class MyMCP extends McpAgent {
                             })
                         }]
                     };
+                }
+            }
+        );
+
+        const summaryLevelSchema = z.enum(["DAY", "WEEK", "MONTH"]);
+
+        this.server.tool(
+            "summaries.compose_context_for_turn",
+            {
+                conversation_id: z.string(),
+                current_message_id: z.string(),
+                mode: z.enum(["intelligent"]),
+                summarization_prompt: z.string().optional(),
+                timezone: z.string().optional(),
+            },
+            async ({ conversation_id, current_message_id, mode, summarization_prompt, timezone }) => {
+                try {
+                    const result = await this.summaryCoordinator.composeContext({
+                        conversationId: conversation_id,
+                        currentMessageId: current_message_id,
+                        mode,
+                        summarizationPrompt: summarization_prompt ?? undefined,
+                        timezone: timezone ?? undefined,
+                    });
+                    return createToolResponse("summaries.compose_context_for_turn", true, result);
+                } catch (error: any) {
+                    console.error("Error in summaries.compose_context_for_turn", error);
+                    return createToolResponse("summaries.compose_context_for_turn", false, undefined, {
+                        message: error?.message ?? "Failed to compose intelligent context",
+                    });
+                }
+            }
+        );
+
+        this.server.tool(
+            "summaries.list_required",
+            {
+                conversation_id: z.string(),
+                current_message_id: z.string(),
+                timezone: z.string().optional(),
+            },
+            async ({ conversation_id, current_message_id, timezone }) => {
+                try {
+                    const result = await this.summaryCoordinator.listRequired({
+                        conversationId: conversation_id,
+                        currentMessageId: current_message_id,
+                        timezone: timezone ?? undefined,
+                    });
+                    return createToolResponse("summaries.list_required", true, result);
+                } catch (error: any) {
+                    console.error("Error in summaries.list_required", error);
+                    return createToolResponse("summaries.list_required", false, undefined, {
+                        message: error?.message ?? "Failed to list required summaries",
+                    });
+                }
+            }
+        );
+
+        this.server.tool(
+            "summaries.get",
+            {
+                conversation_id: z.string(),
+                filters: z
+                    .object({
+                        levels: z.array(summaryLevelSchema).optional(),
+                        start: z.string().optional(),
+                        end: z.string().optional(),
+                    })
+                    .optional(),
+            },
+            async ({ conversation_id, filters }) => {
+                try {
+                    const result = await this.summaryCoordinator.getSummaries({
+                        conversationId: conversation_id,
+                        levels: filters?.levels as SummaryLevel[] | undefined,
+                        start: filters?.start,
+                        end: filters?.end,
+                    });
+                    return createToolResponse("summaries.get", true, { summaries: result });
+                } catch (error: any) {
+                    console.error("Error in summaries.get", error);
+                    return createToolResponse("summaries.get", false, undefined, {
+                        message: error?.message ?? "Failed to fetch summaries",
+                    });
+                }
+            }
+        );
+
+        this.server.tool(
+            "summaries.generate",
+            {
+                conversation_id: z.string(),
+                current_message_id: z.string(),
+                level: summaryLevelSchema,
+                period_start: z.string(),
+                summarization_prompt: z.string().optional(),
+                timezone: z.string().optional(),
+            },
+            async ({ conversation_id, current_message_id, level, period_start, summarization_prompt, timezone }) => {
+                try {
+                    const result = await this.summaryCoordinator.generate({
+                        conversationId: conversation_id,
+                        currentMessageId: current_message_id,
+                        level: level as SummaryLevel,
+                        periodStart: period_start,
+                        summarizationPrompt: summarization_prompt ?? undefined,
+                        timezone: timezone ?? undefined,
+                    });
+                    return createToolResponse("summaries.generate", true, result);
+                } catch (error: any) {
+                    console.error("Error in summaries.generate", error);
+                    return createToolResponse("summaries.generate", false, undefined, {
+                        message: error?.message ?? "Failed to generate summary",
+                    });
                 }
             }
         );
