@@ -131,64 +131,64 @@ class McpServerAgent {
 
         // Store the handler directly for testing
         this.toolHandler = async ({ conversation_id, message_id, period_start, period_end }) => {
-                try {
-                    console.log('\n[WORKER] Tool invoked: get_messages_for_period');
-                    console.log('  conversation_id:', conversation_id);
-                    console.log('  message_id:', message_id);
-                    console.log('  period_start:', period_start);
-                    console.log('  period_end:', period_end);
+            try {
+                console.log('\n[WORKER] Tool invoked: get_messages_for_period');
+                console.log('  conversation_id:', conversation_id);
+                console.log('  message_id:', message_id);
+                console.log('  period_start:', period_start);
+                console.log('  period_end:', period_end);
 
-                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
-                    const normalizedMessageId = this.normalizeId(message_id, 'message_id');
-                    const normalizedPeriodStart = this.normalizeIsoTimestamp(period_start, 'period_start');
-                    const normalizedPeriodEnd = this.normalizeIsoTimestamp(period_end, 'period_end');
+                const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
+                const normalizedMessageId = this.normalizeId(message_id, 'message_id');
+                const normalizedPeriodStart = this.normalizeIsoTimestamp(period_start, 'period_start');
+                const normalizedPeriodEnd = this.normalizeIsoTimestamp(period_end, 'period_end');
 
-                    const startDate = new Date(normalizedPeriodStart);
-                    const endDate = new Date(normalizedPeriodEnd);
-                    if (startDate >= endDate) {
-                        throw new Error('period_end must be after period_start.');
-                    }
-
-                    console.log('\n[WORKER] Walking ancestor chain...');
-                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
-                    const uniqueAncestorIds = Array.from(new Set(ancestorIds));
-                    console.log('[WORKER] Found', uniqueAncestorIds.length, 'ancestors');
-
-                    if (uniqueAncestorIds.length === 0) {
-                        console.log('[WORKER] No ancestors, returning empty');
-                        return createToolResponse('get_messages_for_period', true, { messages: [] });
-                    }
-
-                    console.log('\n[WORKER] Querying Supabase...');
-                    console.log('  .from(chat_messages)');
-                    console.log('  .eq(thread_id):', normalizedConversationId);
-                    console.log('  .in(id): [...', uniqueAncestorIds.length, 'ids...]');
-                    console.log('  .gte(created_at):', normalizedPeriodStart);
-                    console.log('  .lte(created_at):', normalizedPeriodEnd);
-
-                    const { data, error } = await supabase
-                        .from('chat_messages')
-                        .select('*')
-                        .eq('thread_id', normalizedConversationId)
-                        .in('id', uniqueAncestorIds)
-                        .gte('created_at', normalizedPeriodStart)
-                        .lte('created_at', normalizedPeriodEnd)
-                        .order('created_at', { ascending: true });
-
-                    if (error) {
-                        console.error('[WORKER] Supabase error:', error);
-                        throw new Error(`Failed to fetch messages for period: ${error.message}`);
-                    }
-
-                    const messages = data ?? [];
-                    console.log('[WORKER] Query success! Found', messages.length, 'messages\n');
-
-                    return createToolResponse('get_messages_for_period', true, { messages });
-                } catch (error) {
-                    console.error('[WORKER] Error:', error.message);
-                    return createToolResponse('get_messages_for_period', false, undefined, { message: error?.message ?? 'Unknown error' });
+                const startDate = new Date(normalizedPeriodStart);
+                const endDate = new Date(normalizedPeriodEnd);
+                if (startDate >= endDate) {
+                    throw new Error('period_end must be after period_start.');
                 }
-            };
+
+                console.log('\n[WORKER] Walking ancestor chain...');
+                const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
+                const uniqueAncestorIds = Array.from(new Set(ancestorIds));
+                console.log('[WORKER] Found', uniqueAncestorIds.length, 'ancestors');
+
+                if (uniqueAncestorIds.length === 0) {
+                    console.log('[WORKER] No ancestors, returning empty');
+                    return createToolResponse('get_messages_for_period', true, { messages: [] });
+                }
+
+                console.log('\n[WORKER] Querying Supabase...');
+                console.log('  .from(chat_messages)');
+                console.log('  .eq(thread_id):', normalizedConversationId);
+                console.log('  .in(id): [...', uniqueAncestorIds.length, 'ids...]');
+                console.log('  .gte(created_at):', normalizedPeriodStart);
+                console.log('  .lte(created_at):', normalizedPeriodEnd);
+
+                const { data, error } = await supabase
+                    .from('chat_messages')
+                    .select('*')
+                    .eq('thread_id', normalizedConversationId)
+                    .in('id', uniqueAncestorIds)
+                    .gte('created_at', normalizedPeriodStart)
+                    .lte('created_at', normalizedPeriodEnd)
+                    .order('created_at', { ascending: true });
+
+                if (error) {
+                    console.error('[WORKER] Supabase error:', error);
+                    throw new Error(`Failed to fetch messages for period: ${error.message}`);
+                }
+
+                const messages = data ?? [];
+                console.log('[WORKER] Query success! Found', messages.length, 'messages\n');
+
+                return createToolResponse('get_messages_for_period', true, { messages });
+            } catch (error) {
+                console.error('[WORKER] Error:', error.message);
+                return createToolResponse('get_messages_for_period', false, undefined, { message: error?.message ?? 'Unknown error' });
+            }
+        };
 
         console.log('✓ Worker initialized with get_messages_for_period tool\n');
     }
@@ -202,7 +202,7 @@ class McpServerAgent {
 async function testWorker() {
     console.log('[SETUP] Creating McpServerAgent instance...');
     const agent = new McpServerAgent();
-    
+
     await agent.init();
 
     // Test parameters from frontend logs
@@ -226,11 +226,11 @@ async function testWorker() {
         const toolResult = JSON.parse(result.content[0].text);
         console.log('Tool:', toolResult.tool);
         console.log('Success:', toolResult.success);
-        
+
         if (toolResult.success) {
             const messages = toolResult.data?.messages || [];
             console.log('Messages:', messages.length);
-            
+
             if (messages.length > 0) {
                 console.log('\n✓ SUCCESS! Worker code works correctly!\n');
                 console.log('Messages found:');
