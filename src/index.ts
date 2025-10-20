@@ -259,8 +259,8 @@ type ConversationSummaryResponse = {
 
 interface MinimalChatMessageRow {
     id: string;
-    conversation_id: string;
-    parent_message_id: string | null;
+    thread_id: string;
+    parent_id: string | null;
 }
 
 interface ChatMessageRow extends MinimalChatMessageRow {
@@ -455,8 +455,8 @@ export class MyMCP extends McpAgent {
 
         const { data, error } = await supabase
             .from('chat_messages')
-            .select('id, conversation_id, parent_message_id')
-            .eq('conversation_id', normalizedConversationId)
+            .select('id, thread_id, parent_id')
+            .eq('thread_id', normalizedConversationId)
             .eq('id', normalizedMessageId)
             .maybeSingle();
 
@@ -497,7 +497,7 @@ export class MyMCP extends McpAgent {
             );
 
             ancestorIds.push(row.id);
-            currentMessageId = row.parent_message_id;
+            currentMessageId = row.parent_id;
         }
 
         return ancestorIds;
@@ -1446,9 +1446,9 @@ export class MyMCP extends McpAgent {
                     const { data, error } = await supabase
                         .from('chat_messages')
                         .select('*')
-                        .eq('conversation_id', normalizedConversationId)
+                        .eq('thread_id', normalizedConversationId)
                         .gte('created_at', normalizedPeriodStart)
-                        .lt('created_at', normalizedPeriodEnd)
+                        .lte('created_at', normalizedPeriodEnd)
                         .order('created_at', { ascending: true });
 
                     if (error) {
