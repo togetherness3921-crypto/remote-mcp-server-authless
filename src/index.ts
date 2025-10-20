@@ -240,7 +240,7 @@ type SummaryLevel = 'DAY' | 'WEEK' | 'MONTH';
 
 interface ConversationSummaryRecord {
     id: string;
-    thread_id: string;
+    conversation_id: string;
     summary_level: SummaryLevel;
     summary_period_start: string;
     content: string;
@@ -259,8 +259,8 @@ type ConversationSummaryResponse = {
 
 interface MinimalChatMessageRow {
     id: string;
-    thread_id: string;
-    parent_id: string | null;
+    conversation_id: string;
+    parent_message_id: string | null;
 }
 
 interface ChatMessageRow extends MinimalChatMessageRow {
@@ -455,8 +455,8 @@ export class MyMCP extends McpAgent {
 
         const { data, error } = await supabase
             .from('chat_messages')
-            .select('id, thread_id, parent_id')
-            .eq('thread_id', normalizedConversationId)
+            .select('id, conversation_id, parent_message_id')
+            .eq('conversation_id', normalizedConversationId)
             .eq('id', normalizedMessageId)
             .maybeSingle();
 
@@ -472,9 +472,7 @@ export class MyMCP extends McpAgent {
     }
 
     private async ensureMessageBelongsToConversation(conversationId: string, messageId: string): Promise<void> {
-        console.log('[Summaries] ensureMessageBelongsToConversation check', { conversationId, messageId });
-        const result = await this.fetchMessageAncestorRow(conversationId, messageId, 'message_id');
-        console.log('[Summaries] ensureMessageBelongsToConversation success', { conversationId, messageId, found: result.id });
+        await this.fetchMessageAncestorRow(conversationId, messageId, 'message_id');
     }
 
     private async getAncestralMessageIds(conversationId: string, messageId: string): Promise<string[]> {
@@ -499,7 +497,7 @@ export class MyMCP extends McpAgent {
             );
 
             ancestorIds.push(row.id);
-            currentMessageId = row.parent_id;
+            currentMessageId = row.parent_message_id;
         }
 
         return ancestorIds;
@@ -1443,20 +1441,18 @@ export class MyMCP extends McpAgent {
                         throw new Error('period_end must be after period_start.');
                     }
 
-                    await this.ensureMessageBelongsToConversation(normalizedConversationId, normalizedMessageId);
+                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
+                    const uniqueAncestorIds = Array.from(new Set(ancestorIds));
 
-                    console.log('[Summaries] get_messages_for_period request', {
-                        table: 'chat_messages',
-                        threadId: normalizedConversationId,
-                        messageId: normalizedMessageId,
-                        periodStart: normalizedPeriodStart,
-                        periodEnd: normalizedPeriodEnd,
-                    });
+                    if (uniqueAncestorIds.length === 0) {
+                        return createToolResponse('get_messages_for_period', true, { messages: [] });
+                    }
 
                     const { data, error } = await supabase
                         .from('chat_messages')
                         .select('*')
-                        .eq('thread_id', normalizedConversationId)
+                        .eq('conversation_id', normalizedConversationId)
+                        .in('id', uniqueAncestorIds)
                         .gte('created_at', normalizedPeriodStart)
                         .lte('created_at', normalizedPeriodEnd)
                         .order('created_at', { ascending: true });
@@ -1467,39 +1463,8 @@ export class MyMCP extends McpAgent {
 
                     const messages = (data ?? []) as ChatMessageRow[];
 
-                    const dateCounts = new Map<string, number>();
-                    for (const entry of messages) {
-                        const createdAt = typeof entry.created_at === 'string' ? entry.created_at : null;
-                        if (!createdAt) {
-                            continue;
-                        }
-                        try {
-                            const iso = new Date(createdAt).toISOString();
-                            const dateKey = iso.split('T')[0];
-                            dateCounts.set(dateKey, (dateCounts.get(dateKey) ?? 0) + 1);
-                        } catch (parseError) {
-                            console.warn('[Summaries] Failed to parse created_at for logging', { createdAt, parseError });
-                        }
-                    }
-
-                    console.log('[Summaries] get_messages_for_period results', {
-                        table: 'chat_messages',
-                        threadId: normalizedConversationId,
-                        totalMessages: messages.length,
-                        dateCounts: Array.from(dateCounts.entries()),
-                        rawRecords: messages,
-                    });
-
                     return createToolResponse('get_messages_for_period', true, { messages });
                 } catch (error: any) {
-                    console.error('[Summaries] get_messages_for_period failed', {
-                        table: 'chat_messages',
-                        threadId: conversation_id,
-                        messageId: message_id,
-                        periodStart: period_start,
-                        periodEnd: period_end,
-                        error: error?.message ?? error,
-                    });
                     return createToolResponse('get_messages_for_period', false, undefined, { message: error?.message ?? 'Unknown error' });
                 }
             }
