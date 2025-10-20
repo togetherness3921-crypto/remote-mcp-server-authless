@@ -216,7 +216,7 @@ async function testWorker() {
     console.log('[TEST] Calling tool with parameters:');
     console.log(JSON.stringify(testParams, null, 2));
 
-    const result = await agent.callTool('get_messages_for_period', testParams);
+    const result = await agent.callTool(testParams);
 
     console.log('\n╔════════════════════════════════════════════════════════════╗');
     console.log('║  RESULT FROM ACTUAL WORKER CODE                           ║');
