@@ -1441,20 +1441,14 @@ export class MyMCP extends McpAgent {
                         throw new Error('period_end must be after period_start.');
                     }
 
-                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
-                    const uniqueAncestorIds = Array.from(new Set(ancestorIds));
-
-                    if (uniqueAncestorIds.length === 0) {
-                        return createToolResponse('get_messages_for_period', true, { messages: [] });
-                    }
+                    await this.ensureMessageBelongsToConversation(normalizedConversationId, normalizedMessageId);
 
                     const { data, error } = await supabase
                         .from('chat_messages')
                         .select('*')
                         .eq('conversation_id', normalizedConversationId)
-                        .in('id', uniqueAncestorIds)
                         .gte('created_at', normalizedPeriodStart)
-                        .lte('created_at', normalizedPeriodEnd)
+                        .lt('created_at', normalizedPeriodEnd)
                         .order('created_at', { ascending: true });
 
                     if (error) {
