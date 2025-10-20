@@ -129,11 +129,8 @@ class McpServerAgent {
             period_end: z.string().describe('Inclusive ISO8601 timestamp for the end of the window.'),
         });
 
-        // This is the EXACT tool from index.ts
-        this.server.tool(
-            'get_messages_for_period',
-            getMessagesForPeriodParams.shape,
-            async ({ conversation_id, message_id, period_start, period_end }) => {
+        // Store the handler directly for testing
+        this.toolHandler = async ({ conversation_id, message_id, period_start, period_end }) => {
                 try {
                     console.log('\n[WORKER] Tool invoked: get_messages_for_period');
                     console.log('  conversation_id:', conversation_id);
