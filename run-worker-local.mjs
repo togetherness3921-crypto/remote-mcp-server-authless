@@ -31,59 +31,59 @@ import('tsx/esm').then(async (tsx) => {
     // This will compile and load the ACTUAL index.ts file
     const workerModule = await import('./src/index.ts');
     const worker = workerModule.default;
-    
+
     if (!worker || !worker.fetch) {
         throw new Error('Worker does not export a default object with fetch handler');
     }
-    
+
     console.log('✓ Worker compiled and loaded\n');
     console.log('[2/3] Starting HTTP server...\n');
-    
+
     const server = createServer(async (req, res) => {
         try {
             // Build full URL
             const protocol = 'http';
             const host = req.headers.host || `localhost:${PORT}`;
             const url = `${protocol}://${host}${req.url}`;
-            
+
             // Collect request body
             const chunks = [];
             for await (const chunk of req) {
                 chunks.push(chunk);
             }
             const body = Buffer.concat(chunks);
-            
+
             // Create Cloudflare-style Request object
             const request = new Request(url, {
                 method: req.method,
                 headers: req.headers,
                 body: body.length > 0 ? body : undefined,
             });
-            
+
             console.log(`[REQUEST] ${req.method} ${req.url}`);
-            
+
             // Create mock ExecutionContext
             const ctx = {
                 waitUntil: (promise) => promise,
-                passThroughOnException: () => {},
+                passThroughOnException: () => { },
             };
-            
+
             // Call the ACTUAL worker fetch handler
             const response = await worker.fetch(request, env, ctx);
-            
+
             // Send response back
             res.statusCode = response.status;
-            
+
             // Copy headers
             response.headers.forEach((value, key) => {
                 res.setHeader(key, value);
             });
-            
+
             // Send body
             const responseBody = await response.text();
             console.log(`[RESPONSE] ${response.status} ${responseBody.length} bytes\n`);
             res.end(responseBody);
-            
+
         } catch (error) {
             console.error('[ERROR]', error);
             res.statusCode = 500;
@@ -91,7 +91,7 @@ import('tsx/esm').then(async (tsx) => {
             res.end(JSON.stringify({ error: error.message }));
         }
     });
-    
+
     server.listen(PORT, () => {
         console.log('✓ Server started\n');
         console.log('╔════════════════════════════════════════════════════════════╗');
@@ -105,7 +105,7 @@ import('tsx/esm').then(async (tsx) => {
         console.log('You can send HTTP requests to it just like the cloud version.\n');
         console.log('[3/3] Ready for requests...\n');
     });
-    
+
 }).catch(err => {
     console.error('Failed to start worker:', err);
     console.error('\nMake sure tsx is installed:');

@@ -61,41 +61,41 @@ const req = http.request(options, (res) => {
     console.log('╔════════════════════════════════════════════════════════════╗');
     console.log('║  RESPONSE FROM WORKER                                      ║');
     console.log('╚════════════════════════════════════════════════════════════╝\n');
-    
+
     console.log('Status:', res.statusCode);
     console.log('Headers:');
     Object.entries(res.headers).forEach(([key, value]) => {
         console.log(`  ${key}: ${value}`);
     });
     console.log('');
-    
+
     let responseData = '';
-    
+
     res.on('data', (chunk) => {
         responseData += chunk.toString();
     });
-    
+
     res.on('end', () => {
         console.log('Response Body:');
         try {
             const parsed = JSON.parse(responseData);
             console.log(JSON.stringify(parsed, null, 2));
-            
+
             // Parse the tool result
             if (parsed.result && parsed.result.content && parsed.result.content[0]) {
                 const toolResponse = JSON.parse(parsed.result.content[0].text);
-                
+
                 console.log('\n╔════════════════════════════════════════════════════════════╗');
                 console.log('║  TOOL RESULT                                               ║');
                 console.log('╚════════════════════════════════════════════════════════════╝\n');
-                
+
                 console.log('Tool:', toolResponse.tool);
                 console.log('Success:', toolResponse.success);
-                
+
                 if (toolResponse.success && toolResponse.data) {
                     const messages = toolResponse.data.messages || [];
                     console.log('Messages found:', messages.length);
-                    
+
                     if (messages.length > 0) {
                         console.log('\n✓ SUCCESS! Worker returned messages:\n');
                         messages.forEach((msg, i) => {
@@ -118,7 +118,7 @@ const req = http.request(options, (res) => {
             console.log(responseData);
             console.error('\nFailed to parse as JSON');
         }
-        
+
         console.log('\n✓ Test complete\n');
         process.exit(0);
     });
@@ -126,12 +126,12 @@ const req = http.request(options, (res) => {
 
 req.on('error', (err) => {
     console.error('✗ Request failed:', err.message);
-    
+
     if (USE_LOCAL) {
         console.error('\nMake sure the local worker is running:');
         console.error('  node run-worker-local.mjs');
     }
-    
+
     process.exit(1);
 });
 
