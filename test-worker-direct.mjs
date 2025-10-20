@@ -188,21 +188,14 @@ class McpServerAgent {
                     console.error('[WORKER] Error:', error.message);
                     return createToolResponse('get_messages_for_period', false, undefined, { message: error?.message ?? 'Unknown error' });
                 }
-            }
-        );
+            };
 
         console.log('✓ Worker initialized with get_messages_for_period tool\n');
     }
 
-    async callTool(toolName, args) {
-        // Directly invoke the tool handler
-        const handlers = this.server._toolHandlers || this.server.toolHandlers;
-        if (!handlers || !handlers.get(toolName)) {
-            throw new Error(`Tool "${toolName}" not found`);
-        }
-
-        const handler = handlers.get(toolName);
-        return await handler(args);
+    async callTool(args) {
+        // Directly invoke the stored handler
+        return await this.toolHandler(args);
     }
 }
 
