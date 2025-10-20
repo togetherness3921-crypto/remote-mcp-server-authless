@@ -149,17 +149,17 @@ class LifeCurrentsAgent {
             const messages = data ?? [];
             console.log(`[Worker] Success! Found ${messages.length} messages`);
 
-            return { 
-                tool: 'get_messages_for_period', 
-                success: true, 
-                data: { messages } 
+            return {
+                tool: 'get_messages_for_period',
+                success: true,
+                data: { messages }
             };
         } catch (error) {
             console.error('[Worker] Error:', error.message);
-            return { 
-                tool: 'get_messages_for_period', 
-                success: false, 
-                error: { message: error.message } 
+            return {
+                tool: 'get_messages_for_period',
+                success: false,
+                error: { message: error.message }
             };
         }
     }
@@ -168,7 +168,7 @@ class LifeCurrentsAgent {
 // Run the test
 async function runTest() {
     const agent = new LifeCurrentsAgent();
-    
+
     // Exact parameters from frontend logs
     const testParams = {
         conversation_id: 'f44410bf-85db-4f94-a988-ee13ebc3b72c',
@@ -198,13 +198,13 @@ async function runTest() {
     if (result.success) {
         const messages = result.data?.messages || [];
         console.log('Message count:', messages.length);
-        
+
         if (messages.length > 0) {
             console.log('\nMessages returned:');
             messages.forEach((msg, i) => {
                 console.log(`  ${i + 1}. [${msg.role}] ${msg.id} at ${msg.created_at}`);
             });
-            
+
             console.log('\n╔════════════════════════════════════════════════════════════╗');
             console.log('║  ✓ SUCCESS! FIXED WORKER CODE WORKS!                      ║');
             console.log('╚════════════════════════════════════════════════════════════╝');
