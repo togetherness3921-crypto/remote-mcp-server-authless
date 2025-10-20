@@ -1443,6 +1443,14 @@ export class MyMCP extends McpAgent {
 
                     await this.ensureMessageBelongsToConversation(normalizedConversationId, normalizedMessageId);
 
+                    console.log('[Summaries] get_messages_for_period request', {
+                        table: 'chat_messages',
+                        threadId: normalizedConversationId,
+                        messageId: normalizedMessageId,
+                        periodStart: normalizedPeriodStart,
+                        periodEnd: normalizedPeriodEnd,
+                    });
+
                     const { data, error } = await supabase
                         .from('chat_messages')
                         .select('*')
@@ -1457,8 +1465,39 @@ export class MyMCP extends McpAgent {
 
                     const messages = (data ?? []) as ChatMessageRow[];
 
+                    const dateCounts = new Map<string, number>();
+                    for (const entry of messages) {
+                        const createdAt = typeof entry.created_at === 'string' ? entry.created_at : null;
+                        if (!createdAt) {
+                            continue;
+                        }
+                        try {
+                            const iso = new Date(createdAt).toISOString();
+                            const dateKey = iso.split('T')[0];
+                            dateCounts.set(dateKey, (dateCounts.get(dateKey) ?? 0) + 1);
+                        } catch (parseError) {
+                            console.warn('[Summaries] Failed to parse created_at for logging', { createdAt, parseError });
+                        }
+                    }
+
+                    console.log('[Summaries] get_messages_for_period results', {
+                        table: 'chat_messages',
+                        threadId: normalizedConversationId,
+                        totalMessages: messages.length,
+                        dateCounts: Array.from(dateCounts.entries()),
+                        rawRecords: messages,
+                    });
+
                     return createToolResponse('get_messages_for_period', true, { messages });
                 } catch (error: any) {
+                    console.error('[Summaries] get_messages_for_period failed', {
+                        table: 'chat_messages',
+                        threadId: conversation_id,
+                        messageId: message_id,
+                        periodStart: period_start,
+                        periodEnd: period_end,
+                        error: error?.message ?? error,
+                    });
                     return createToolResponse('get_messages_for_period', false, undefined, { message: error?.message ?? 'Unknown error' });
                 }
             }
