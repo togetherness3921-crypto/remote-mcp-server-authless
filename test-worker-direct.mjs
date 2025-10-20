@@ -3,7 +3,6 @@
  * We'll import and instantiate the actual classes and call the tool directly
  */
 
-import { McpAgent } from 'agents/mcp';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { createClient } from '@supabase/supabase-js';
