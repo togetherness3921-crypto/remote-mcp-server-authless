@@ -446,37 +446,37 @@ export class MyMCP extends McpAgent {
     }
 
     private async fetchMessageAncestorRow(
-        threadId: string,
+        conversationId: string,
         messageId: string,
         fieldLabel: string,
     ): Promise<MinimalChatMessageRow> {
-        const normalizedThreadId = this.normalizeId(threadId, 'thread_id');
+        const normalizedConversationId = this.normalizeId(conversationId, 'conversation_id');
         const normalizedMessageId = this.normalizeId(messageId, fieldLabel);
 
         const { data, error } = await supabase
             .from('chat_messages')
             .select('id, thread_id, parent_id')
-            .eq('thread_id', normalizedThreadId)
+            .eq('thread_id', normalizedConversationId)
             .eq('id', normalizedMessageId)
             .maybeSingle();
 
         if (error) {
-            throw new Error(`Failed to fetch ${fieldLabel} "${normalizedMessageId}" for thread "${normalizedThreadId}": ${error.message}`);
+            throw new Error(`Failed to fetch ${fieldLabel} "${normalizedMessageId}" for conversation "${normalizedConversationId}": ${error.message}`);
         }
 
         if (!data) {
-            throw new Error(`Message "${normalizedMessageId}" (from ${fieldLabel}) was not found in thread "${normalizedThreadId}".`);
+            throw new Error(`Message "${normalizedMessageId}" (from ${fieldLabel}) was not found in conversation "${normalizedConversationId}".`);
         }
 
         return data as MinimalChatMessageRow;
     }
 
-    private async ensureMessageBelongsToThread(threadId: string, messageId: string): Promise<void> {
-        await this.fetchMessageAncestorRow(threadId, messageId, 'message_id');
+    private async ensureMessageBelongsToConversation(conversationId: string, messageId: string): Promise<void> {
+        await this.fetchMessageAncestorRow(conversationId, messageId, 'message_id');
     }
 
-    private async getAncestralMessageIds(threadId: string, messageId: string): Promise<string[]> {
-        const normalizedThreadId = this.normalizeId(threadId, 'thread_id');
+    private async getAncestralMessageIds(conversationId: string, messageId: string): Promise<string[]> {
+        const normalizedConversationId = this.normalizeId(conversationId, 'conversation_id');
         const normalizedMessageId = this.normalizeId(messageId, 'message_id');
 
         const ancestorIds: string[] = [];
@@ -485,13 +485,13 @@ export class MyMCP extends McpAgent {
 
         while (currentMessageId) {
             if (visited.has(currentMessageId)) {
-                throw new Error(`Detected a circular parent relationship involving message "${currentMessageId}" in thread "${normalizedThreadId}".`);
+                throw new Error(`Detected a circular parent relationship involving message "${currentMessageId}" in conversation "${normalizedConversationId}".`);
             }
 
             visited.add(currentMessageId);
 
             const row = await this.fetchMessageAncestorRow(
-                normalizedThreadId,
+                normalizedConversationId,
                 currentMessageId,
                 currentMessageId === normalizedMessageId ? 'message_id' : 'parent_id',
             );
@@ -570,14 +570,14 @@ export class MyMCP extends McpAgent {
         type UpdateSystemInstructionsArgs = z.infer<typeof updateSystemInstructionsParams> & { instruction_id?: string, dry_run?: boolean };
 
         const getConversationSummariesParams = z.object({
-            conversation_id: z.string().describe('Thread identifier (legacy name retained for compatibility).'),
+            conversation_id: z.string().describe('Conversation identifier for the thread.'),
             message_id: z.string().describe('Head message identifier for the branch.'),
         });
 
         type GetConversationSummariesArgs = z.infer<typeof getConversationSummariesParams>;
 
         const createConversationSummaryParams = z.object({
-            conversation_id: z.string().describe('Thread identifier (legacy name retained for compatibility).'),
+            conversation_id: z.string().describe('Conversation identifier for the thread.'),
             summary_level: z.enum(['DAY', 'WEEK', 'MONTH']).describe('Tier of the summary.'),
             summary_period_start: z.string().describe('ISO8601 start timestamp for the summarised period.'),
             content: z.string().describe('Summary content to persist.'),
@@ -587,7 +587,7 @@ export class MyMCP extends McpAgent {
         type CreateConversationSummaryArgs = z.infer<typeof createConversationSummaryParams>;
 
         const getMessagesForPeriodParams = z.object({
-            conversation_id: z.string().describe('Thread identifier (legacy name retained for compatibility).'),
+            conversation_id: z.string().describe('Conversation identifier for the thread.'),
             message_id: z.string().describe('Head message identifier for the branch.'),
             period_start: z.string().describe('Inclusive ISO8601 timestamp for the beginning of the window.'),
             period_end: z.string().describe('Inclusive ISO8601 timestamp for the end of the window.'),
@@ -1328,9 +1328,9 @@ export class MyMCP extends McpAgent {
             getConversationSummariesParams.shape,
             async ({ conversation_id, message_id }) => {
                 try {
-                    const normalizedThreadId = this.normalizeId(conversation_id, 'thread_id');
+                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
                     const normalizedMessageId = this.normalizeId(message_id, 'message_id');
-                    const ancestorIds = await this.getAncestralMessageIds(normalizedThreadId, normalizedMessageId);
+                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
                     const uniqueAncestorIds = Array.from(new Set(ancestorIds));
 
                     if (uniqueAncestorIds.length === 0) {
@@ -1340,7 +1340,7 @@ export class MyMCP extends McpAgent {
                     const { data, error } = await supabase
                         .from('conversation_summaries')
                         .select('id, summary_level, summary_period_start, content, created_by_message_id, created_at, thread_id')
-                        .eq('thread_id', normalizedThreadId)
+                        .eq('thread_id', normalizedConversationId)
                         .in('created_by_message_id', uniqueAncestorIds)
                         .order('summary_period_start', { ascending: true })
                         .order('summary_level', { ascending: true })
@@ -1365,7 +1365,7 @@ export class MyMCP extends McpAgent {
             createConversationSummaryParams.shape,
             async ({ conversation_id, summary_level, summary_period_start, content, created_by_message_id }) => {
                 try {
-                    const normalizedThreadId = this.normalizeId(conversation_id, 'thread_id');
+                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
                     const normalizedMessageId = this.normalizeId(created_by_message_id, 'created_by_message_id');
                     const normalizedPeriodStart = this.normalizeIsoTimestamp(summary_period_start, 'summary_period_start');
 
@@ -1373,10 +1373,10 @@ export class MyMCP extends McpAgent {
                         throw new Error('Summary content cannot be empty.');
                     }
 
-                    await this.ensureMessageBelongsToThread(normalizedThreadId, normalizedMessageId);
+                    await this.ensureMessageBelongsToConversation(normalizedConversationId, normalizedMessageId);
 
                     const insertPayload = {
-                        thread_id: normalizedThreadId,
+                        thread_id: normalizedConversationId,
                         summary_level,
                         summary_period_start: normalizedPeriodStart,
                         content,
@@ -1394,7 +1394,7 @@ export class MyMCP extends McpAgent {
                             const { data: existingSummary, error: fetchError } = await supabase
                                 .from('conversation_summaries')
                                 .select('id, summary_level, summary_period_start, content, created_by_message_id, created_at, thread_id')
-                                .eq('thread_id', normalizedThreadId)
+                                .eq('thread_id', normalizedConversationId)
                                 .eq('summary_level', summary_level)
                                 .eq('summary_period_start', normalizedPeriodStart)
                                 .eq('created_by_message_id', normalizedMessageId)
@@ -1430,7 +1430,7 @@ export class MyMCP extends McpAgent {
             getMessagesForPeriodParams.shape,
             async ({ conversation_id, message_id, period_start, period_end }) => {
                 try {
-                    const normalizedThreadId = this.normalizeId(conversation_id, 'thread_id');
+                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
                     const normalizedMessageId = this.normalizeId(message_id, 'message_id');
                     const normalizedPeriodStart = this.normalizeIsoTimestamp(period_start, 'period_start');
                     const normalizedPeriodEnd = this.normalizeIsoTimestamp(period_end, 'period_end');
@@ -1441,7 +1441,7 @@ export class MyMCP extends McpAgent {
                         throw new Error('period_end must be after period_start.');
                     }
 
-                    const ancestorIds = await this.getAncestralMessageIds(normalizedThreadId, normalizedMessageId);
+                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
                     const uniqueAncestorIds = Array.from(new Set(ancestorIds));
 
                     if (uniqueAncestorIds.length === 0) {
@@ -1451,7 +1451,7 @@ export class MyMCP extends McpAgent {
                     const { data, error } = await supabase
                         .from('chat_messages')
                         .select('*')
-                        .eq('thread_id', normalizedThreadId)
+                        .eq('thread_id', normalizedConversationId)
                         .in('id', uniqueAncestorIds)
                         .gte('created_at', normalizedPeriodStart)
                         .lte('created_at', normalizedPeriodEnd)
