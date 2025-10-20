@@ -1326,11 +1326,11 @@ export class MyMCP extends McpAgent {
         this.server.tool<GetConversationSummariesArgs>(
             'get_conversation_summaries',
             getConversationSummariesParams.shape,
-            async ({ conversation_id, message_id }) => {
+            async ({ thread_id, message_id }) => {
                 try {
-                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
+                    const normalizedThreadId = this.normalizeId(thread_id, 'thread_id');
                     const normalizedMessageId = this.normalizeId(message_id, 'message_id');
-                    const ancestorIds = await this.getAncestralMessageIds(normalizedConversationId, normalizedMessageId);
+                    const ancestorIds = await this.getAncestralMessageIds(normalizedThreadId, normalizedMessageId);
                     const uniqueAncestorIds = Array.from(new Set(ancestorIds));
 
                     if (uniqueAncestorIds.length === 0) {
@@ -1340,7 +1340,7 @@ export class MyMCP extends McpAgent {
                     const { data, error } = await supabase
                         .from('conversation_summaries')
                         .select('id, summary_level, summary_period_start, content, created_by_message_id, created_at, thread_id')
-                        .eq('thread_id', normalizedConversationId)
+                        .eq('thread_id', normalizedThreadId)
                         .in('created_by_message_id', uniqueAncestorIds)
                         .order('summary_period_start', { ascending: true })
                         .order('summary_level', { ascending: true })
@@ -1363,9 +1363,9 @@ export class MyMCP extends McpAgent {
         this.server.tool<CreateConversationSummaryArgs>(
             'create_conversation_summary',
             createConversationSummaryParams.shape,
-            async ({ conversation_id, summary_level, summary_period_start, content, created_by_message_id }) => {
+            async ({ thread_id, summary_level, summary_period_start, content, created_by_message_id }) => {
                 try {
-                    const normalizedConversationId = this.normalizeId(conversation_id, 'conversation_id');
+                    const normalizedThreadId = this.normalizeId(thread_id, 'thread_id');
                     const normalizedMessageId = this.normalizeId(created_by_message_id, 'created_by_message_id');
                     const normalizedPeriodStart = this.normalizeIsoTimestamp(summary_period_start, 'summary_period_start');
 
@@ -1373,10 +1373,10 @@ export class MyMCP extends McpAgent {
                         throw new Error('Summary content cannot be empty.');
                     }
 
-                    await this.ensureMessageBelongsToConversation(normalizedConversationId, normalizedMessageId);
+                    await this.ensureMessageBelongsToConversation(normalizedThreadId, normalizedMessageId);
 
                     const insertPayload = {
-                        thread_id: normalizedConversationId,
+                        thread_id: normalizedThreadId,
                         summary_level,
                         summary_period_start: normalizedPeriodStart,
                         content,
@@ -1394,7 +1394,7 @@ export class MyMCP extends McpAgent {
                             const { data: existingSummary, error: fetchError } = await supabase
                                 .from('conversation_summaries')
                                 .select('id, summary_level, summary_period_start, content, created_by_message_id, created_at, thread_id')
-                                .eq('thread_id', normalizedConversationId)
+                                .eq('thread_id', normalizedThreadId)
                                 .eq('summary_level', summary_level)
                                 .eq('summary_period_start', normalizedPeriodStart)
                                 .eq('created_by_message_id', normalizedMessageId)
